@@ -18,6 +18,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
+import { getLocalDateString } from '../../utils/date';
 
 interface PatientDashboardProps {
   currentUser: User | null;
@@ -32,7 +33,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
   // Booking Flow State
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('All');
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('u-doc-1');
-  const [bookingDate, setBookingDate] = useState<string>('2026-10-03');
+  const [bookingDate, setBookingDate] = useState<string>(() => getLocalDateString(1));
   const [bookingSlot, setBookingSlot] = useState<string>('10:00 AM');
   const [bookingReason, setBookingReason] = useState<string>('');
   const [bookingSuccessToken, setBookingSuccessToken] = useState<string | null>(null);
@@ -513,7 +514,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                     required
                     value={bookingDate}
                     onChange={(e) => setBookingDate(e.target.value)}
-                    min="2026-10-02"
+                    min={getLocalDateString()}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 bg-white"
                   />
                 </div>

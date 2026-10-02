@@ -16,6 +16,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
+import { getLocalDateString } from '../../utils/date';
 
 interface DoctorDashboardProps {
   currentUser: User | null;
@@ -56,7 +57,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     }) : undefined;
   }, []);
 
-  const todayStr = '2026-10-02';
+  const todayStr = getLocalDateString();
   const doctorId = currentUser?.id || 'u-doc-1';
 
   // Filter doctor's appointments
@@ -115,7 +116,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
         'Avoid strenuous lifting and late-night exhaustion',
       ]
     );
-    setFollowUpDate(apt.prescription?.followUpDate || '2026-10-09');
+    setFollowUpDate(apt.prescription?.followUpDate || getLocalDateString(7));
     setDoctorNotes(apt.prescription?.doctorNotes || 'Maintain adequate hydration and monitor symptoms.');
 
     // If waiting, update status to in_consultation

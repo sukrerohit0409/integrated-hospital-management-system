@@ -14,6 +14,7 @@ import { Building2, Phone, ShieldCheck, HeartHandshake, Stethoscope, Clock } fro
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => store.getCurrentUser());
+  const [syncError, setSyncError] = useState<string | null>(() => store.getSyncError());
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
 
@@ -21,6 +22,7 @@ export default function App() {
   useEffect(() => {
     return store.subscribe ? store.subscribe(() => {
       setCurrentUser(store.getCurrentUser());
+      setSyncError(store.getSyncError());
     }) : undefined;
   }, []);
 
@@ -44,6 +46,12 @@ export default function App() {
         onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
         onLogout={handleLogout}
       />
+
+      {syncError && (
+        <div role="alert" className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900">
+          Shared demo data sync issue: {syncError}
+        </div>
+      )}
 
       {/* Main Hospital Workspace */}
       <main className="grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">

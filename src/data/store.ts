@@ -28,11 +28,39 @@ const STORAGE_KEYS = {
   LEAVES: 'ihms_leaves',
 };
 
+const SYNCED_COLLECTIONS = [
+  STORAGE_KEYS.USERS,
+  STORAGE_KEYS.APPOINTMENTS,
+  STORAGE_KEYS.ATTENDANCE,
+  STORAGE_KEYS.REVENUE,
+  STORAGE_KEYS.EXPENSES,
+  STORAGE_KEYS.LEAVES,
+] as const;
+
+const SHARED_DATA_ENABLED = import.meta.env.VITE_SHARED_DEMO_DATA === 'true';
+
+type SharedRecord = {
+  collection: string;
+  record_id: string;
+  data: { id: string };
+  updated_at: string;
+};
+
+let pendingSyncWrites = 0;
+let refreshInProgress = false;
+let sharedDataError: string | null = null;
+let syncWriteQueue: Promise<void> = Promise.resolve();
+
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
 function notify() {
   listeners.forEach((listener) => listener());
+}
+
+function setSharedDataError(message: string | null): void {
+  sharedDataError = message;
+  notify();
 }
 
 export function subscribe(listener: Listener) {
@@ -55,27 +83,176 @@ function getStored<T>(key: string, fallback: T): T {
 
 function setStored<T>(key: string, value: T): void {
   try {
+    const previous = localStorage.getItem(key);
     localStorage.setItem(key, JSON.stringify(value));
     notify();
+
+    if (SHARED_DATA_ENABLED && SYNCED_COLLECTIONS.includes(key as typeof SYNCED_COLLECTIONS[number])) {
+      const oldRecords = previous ? JSON.parse(previous) as { id: string }[] : [];
+      const newRecords = Array.isArray(value) ? value as { id: string }[] : [];
+      const oldById = new Map(oldRecords.map((record) => [record.id, JSON.stringify(record)]));
+      const newIds = new Set(newRecords.map((record) => record.id));
+      const changedRecords = newRecords.filter(
+        (record) => oldById.get(record.id) !== JSON.stringify(record),
+      );
+      const deletedIds = oldRecords
+        .filter((record) => !newIds.has(record.id))
+        .map((record) => record.id);
+
+      if (changedRecords.length > 0 || deletedIds.length > 0) {
+        queueSharedUpdate(key, changedRecords, deletedIds);
+      }
+    }
   } catch (err) {
     console.error(`Error saving ${key}:`, err);
+  }
+}
+
+async function loadSharedRecords(): Promise<SharedRecord[]> {
+  const response = await fetch('/api/demo-state');
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Shared-data load failed (${response.status}).`);
+  }
+  return response.json() as Promise<SharedRecord[]>;
+}
+
+function setLocalCollection(key: string, records: { id: string }[]): void {
+  localStorage.setItem(key, JSON.stringify(records));
+}
+
+function queueSharedUpdate(
+  collection: string,
+  records: { id: string }[],
+  deletedIds: string[],
+): void {
+  pendingSyncWrites += 1;
+  syncWriteQueue = syncWriteQueue
+    .then(async () => {
+      const response = await fetch('/api/demo-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection, records, deletedIds }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Shared-data update failed (${response.status}).`);
+      }
+      setSharedDataError(null);
+    })
+    .catch((error: unknown) => {
+      console.error(`Could not sync ${collection} with the shared database:`, error);
+      setSharedDataError(
+        error instanceof Error
+          ? error.message
+          : `Could not sync ${collection} with the shared database.`,
+      );
+    })
+    .finally(() => {
+      pendingSyncWrites -= 1;
+    });
+}
+
+async function refreshSharedData(seedMissingCollections: boolean): Promise<void> {
+  if (!SHARED_DATA_ENABLED || refreshInProgress || pendingSyncWrites > 0) return;
+  refreshInProgress = true;
+
+  try {
+    const remoteRecords = await loadSharedRecords();
+    if (pendingSyncWrites > 0) return;
+    const grouped = new Map<string, SharedRecord[]>();
+    for (const key of SYNCED_COLLECTIONS) grouped.set(key, []);
+    for (const record of remoteRecords) {
+      grouped.get(record.collection)?.push(record);
+    }
+
+    const initialized = remoteRecords.some((record) => record.collection === 'ihms_settings');
+    for (const key of SYNCED_COLLECTIONS) {
+      const records = grouped.get(key) || [];
+      if (records.length === 0 && seedMissingCollections && !initialized) {
+        const fallback = getStored(key, getInitialCollection(key));
+        setLocalCollection(key, fallback);
+        await fetch('/api/demo-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            collection: key,
+            records: fallback,
+            deletedIds: [],
+          }),
+        }).then(async (response) => {
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error || `Could not initialize ${key} (${response.status}).`);
+          }
+        });
+      } else {
+        setLocalCollection(
+          key,
+          records.map((record) => record.data),
+        );
+      }
+    }
+
+    if (!initialized) {
+      const response = await fetch('/api/demo-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collection: 'ihms_settings',
+          records: [{ id: 'initialized' }],
+          deletedIds: [],
+        }),
+      });
+      if (!response.ok) throw new Error('Could not mark shared demo data as initialized.');
+    }
+
+    setSharedDataError(null);
+    notify();
+  } finally {
+    refreshInProgress = false;
+  }
+}
+
+function getInitialCollection(key: string): { id: string }[] {
+  switch (key) {
+    case STORAGE_KEYS.USERS: return INITIAL_USERS;
+    case STORAGE_KEYS.APPOINTMENTS: return INITIAL_APPOINTMENTS;
+    case STORAGE_KEYS.ATTENDANCE: return INITIAL_ATTENDANCE;
+    case STORAGE_KEYS.REVENUE: return INITIAL_REVENUE;
+    case STORAGE_KEYS.EXPENSES: return INITIAL_EXPENSES;
+    case STORAGE_KEYS.LEAVES: return INITIAL_LEAVES;
+    default: return [];
   }
 }
 
 // Store API
 export const store = {
   subscribe: (listener: Listener) => subscribe(listener),
+  getSyncError: () => sharedDataError,
+
+  initialize: async () => {
+    if (!SHARED_DATA_ENABLED) return;
+    await refreshSharedData(true);
+    window.setInterval(() => {
+      void refreshSharedData(false).catch((error: unknown) => {
+        console.error('Could not refresh shared demo data:', error);
+        setSharedDataError(
+          error instanceof Error ? error.message : 'Could not refresh shared demo data.',
+        );
+      });
+    }, 4000);
+  },
 
   // Reset all to fresh mock data
   resetAll: () => {
-    localStorage.removeItem(STORAGE_KEYS.USERS);
+    setStored(STORAGE_KEYS.USERS, INITIAL_USERS);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-    localStorage.removeItem(STORAGE_KEYS.APPOINTMENTS);
-    localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
-    localStorage.removeItem(STORAGE_KEYS.REVENUE);
-    localStorage.removeItem(STORAGE_KEYS.EXPENSES);
-    localStorage.removeItem(STORAGE_KEYS.LEAVES);
-    notify();
+    setStored(STORAGE_KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS);
+    setStored(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+    setStored(STORAGE_KEYS.REVENUE, INITIAL_REVENUE);
+    setStored(STORAGE_KEYS.EXPENSES, INITIAL_EXPENSES);
+    setStored(STORAGE_KEYS.LEAVES, INITIAL_LEAVES);
   },
 
   // USERS

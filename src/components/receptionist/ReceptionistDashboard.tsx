@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, RevenueItem } from '../../types';
 import { store } from '../../data/store';
+import { getLocalDateString } from '../../utils/date';
 import { 
   Users, 
   CalendarClock, 
@@ -47,7 +48,7 @@ export const ReceptionistDashboard: React.FC = () => {
 
   // Slot Checker State
   const [slotDoctorId, setSlotDoctorId] = useState('u-doc-1');
-  const [slotDate, setSlotDate] = useState('2026-10-02');
+  const [slotDate, setSlotDate] = useState(getLocalDateString());
 
   React.useEffect(() => {
     return store.subscribe ? store.subscribe(() => {
@@ -57,7 +58,7 @@ export const ReceptionistDashboard: React.FC = () => {
     }) : undefined;
   }, []);
 
-  const todayStr = '2026-10-02';
+  const todayStr = getLocalDateString();
   const doctors = users.filter((u) => u.role === 'doctor');
 
   // Today's appointments
@@ -66,6 +67,21 @@ export const ReceptionistDashboard: React.FC = () => {
       .filter((a) => a.date === todayStr)
       .sort((a, b) => a.tokenNumber.localeCompare(b.tokenNumber));
   }, [appointments]);
+
+  const upcomingOnlineAppointments = useMemo(
+    () =>
+      appointments
+        .filter(
+          (appointment) =>
+            appointment.date > todayStr &&
+            appointment.type !== 'walk_in' &&
+            appointment.status === 'scheduled',
+        )
+        .sort((a, b) =>
+          `${a.date} ${a.timeSlot}`.localeCompare(`${b.date} ${b.timeSlot}`),
+        ),
+    [appointments, todayStr],
+  );
 
   // Today's revenue ONLY (specifically constrained for receptionist access)
   const todayRevenue = useMemo(() => {
@@ -333,6 +349,47 @@ export const ReceptionistDashboard: React.FC = () => {
               </p>
               <p className="text-[11px] text-emerald-700 mt-1">Rx generated and closed</p>
             </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-200">
+              <h2 className="text-sm font-bold text-slate-900">
+                Upcoming Online Appointments ({upcomingOnlineAppointments.length})
+              </h2>
+              <p className="text-xs text-slate-500">
+                Future bookings shared by patients and assigned to doctors
+              </p>
+            </div>
+            {upcomingOnlineAppointments.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
+                    <tr>
+                      <th className="py-2.5 px-4">Date & Time</th>
+                      <th className="py-2.5 px-4">Patient</th>
+                      <th className="py-2.5 px-4">Doctor</th>
+                      <th className="py-2.5 px-4">Token</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {upcomingOnlineAppointments.map((appointment) => (
+                      <tr key={appointment.id}>
+                        <td className="py-2.5 px-4">
+                          {appointment.date} · {appointment.timeSlot}
+                        </td>
+                        <td className="py-2.5 px-4">{appointment.patientName}</td>
+                        <td className="py-2.5 px-4">{appointment.doctorName}</td>
+                        <td className="py-2.5 px-4 font-mono">{appointment.tokenNumber}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="px-5 py-4 text-xs text-slate-500">
+                No upcoming online appointments.
+              </p>
+            )}
           </div>
 
           {/* Today's Queue Management Table */}

@@ -22,13 +22,13 @@ A comprehensive, role-based hospital management web application built with **Rea
 | Build Tool | Vite 8 |
 | Icons | Lucide React |
 | Animation | Motion (Framer Motion) |
-| Data Store | In-memory (localStorage persistence) |
+| Data Store | Browser localStorage; optional shared Supabase database for the Vercel demo |
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Node.js** v18 or higher
+- **Node.js** v20.19+ or v22.12+
 - **npm** v9 or higher
 
 ### Installation
@@ -53,6 +53,21 @@ The app will be available at **http://localhost:3000**
 npm run build
 npm run start
 ```
+
+### Share demo data across browsers with Supabase
+
+By default, each browser stores its own data in `localStorage`. To share users, appointments, attendance, billing, expenses, and leave data between browsers:
+
+1. Create a Supabase project.
+2. In its **SQL Editor**, run [`supabase/schema.sql`](./supabase/schema.sql).
+3. In **Project Settings → API**, copy the project URL and the `service_role` key.
+4. In Vercel **Project → Settings → Environment Variables**, add:
+   - `VITE_SHARED_DEMO_DATA` = `true` (Production, Preview, and Development)
+   - `SUPABASE_URL` = your Supabase project URL (server-side)
+   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase `service_role` key (server-side only; never add a `VITE_` prefix)
+5. Redeploy the project.
+
+The demo API polls for shared changes every four seconds. The initial mock records are copied into Supabase the first time the shared store is initialized. The API is intentionally public for this demo, so anyone with the deployed URL can view and modify its demo records. Do not use it for real patient data.
 
 ## Demo Credentials
 
