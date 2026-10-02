@@ -81,13 +81,8 @@ export const store = {
   // USERS
   getUsers: (): User[] => getStored<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS),
 
-  getCurrentUser: (): User | null => {
-    const stored = getStored<User | null>(STORAGE_KEYS.CURRENT_USER, null);
-    if (stored) return stored;
-    // Default to admin for convenience
-    const users = store.getUsers();
-    return users.find((u) => u.role === 'admin') || users[0];
-  },
+  getCurrentUser: (): User | null =>
+    getStored<User | null>(STORAGE_KEYS.CURRENT_USER, null),
 
   setCurrentUser: (user: User | null) => {
     setStored(STORAGE_KEYS.CURRENT_USER, user);
