@@ -13,7 +13,7 @@ void store.initialize().then(
       <main className="mx-auto max-w-xl p-8 text-center font-sans">
         <h1 className="text-xl font-bold text-red-700">Could not load shared demo data</h1>
         <p className="mt-3 text-slate-700">
-          Check the Supabase settings in Vercel and redeploy the project.
+          Check the Neon database connection in Vercel and redeploy the project.
         </p>
       </main>,
     );

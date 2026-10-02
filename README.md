@@ -22,7 +22,7 @@ A comprehensive, role-based hospital management web application built with **Rea
 | Build Tool | Vite 8 |
 | Icons | Lucide React |
 | Animation | Motion (Framer Motion) |
-| Data Store | Browser localStorage; optional shared Supabase database for the Vercel demo |
+| Data Store | Browser localStorage; optional shared Neon PostgreSQL database for the Vercel demo |
 
 ## Getting Started
 
@@ -54,20 +54,17 @@ npm run build
 npm run start
 ```
 
-### Share demo data across browsers with Supabase
+### Share demo data across browsers with Vercel and Neon
 
 By default, each browser stores its own data in `localStorage`. To share users, appointments, attendance, billing, expenses, and leave data between browsers:
 
-1. Create a Supabase project.
-2. In its **SQL Editor**, run [`supabase/schema.sql`](./supabase/schema.sql).
-3. In **Project Settings → API**, copy the project URL and the `service_role` key.
-4. In Vercel **Project → Settings → Environment Variables**, add:
-   - `VITE_SHARED_DEMO_DATA` = `true` (Production, Preview, and Development)
-   - `SUPABASE_URL` = your Supabase project URL (server-side)
-   - `SUPABASE_SERVICE_ROLE_KEY` = your Supabase `service_role` key (server-side only; never add a `VITE_` prefix)
+1. In the Vercel dashboard, open the project and choose **Storage** or **Marketplace**, then create/connect a **Neon Postgres** database.
+2. Open the connected Neon database's SQL editor and run [`database/schema.sql`](./database/schema.sql).
+3. In Vercel **Project → Settings → Environment Variables**, set `VITE_SHARED_DEMO_DATA` to `true` for the environments you deploy.
+4. Confirm the Neon integration added a server-side connection variable named `POSTGRES_URL` or `DATABASE_URL`. The API accepts either of those, or `POSTGRES_URL_NON_POOLING`. Never prefix the database URL with `VITE_`.
 5. Redeploy the project.
 
-The demo API polls for shared changes every four seconds. The initial mock records are copied into Supabase the first time the shared store is initialized. The API is intentionally public for this demo, so anyone with the deployed URL can view and modify its demo records. Do not use it for real patient data.
+The demo API polls for shared changes every four seconds. The initial mock records are copied into Neon the first time the shared store is initialized. The API is intentionally public for this demo, so anyone with the deployed URL can view and modify its demo records. Do not use it for real patient data.
 
 ## Demo Credentials
 
