@@ -229,7 +229,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="e.g. rohit@gmail.com or 1122334455"
+                  placeholder="Enter Email Address or Mobile Number"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
@@ -280,4 +280,3 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     </div>
   );
 };
-
