@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   ChevronDown
 } from 'lucide-react';
+import { getUserDisplayName, getUserInitials } from '../utils/userDisplay';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -34,6 +35,9 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [roleMenuOpen, setRoleMenuOpen] = React.useState(false);
   const menuRef = React.useRef<HTMLDivElement>(null);
+  const displayName = currentUser
+    ? getUserDisplayName(currentUser.name, currentUser.email, currentUser.role)
+    : '';
 
   // Auto-close user profile chip when clicking outside anywhere on the web app or pressing Escape
   React.useEffect(() => {
@@ -127,11 +131,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 transition-colors"
                 >
                   <div className="w-7 h-7 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-xs font-bold shrink-0">
-                    {currentUser.name.charAt(0)}
+                    {getUserInitials(displayName)}
                   </div>
                   <div className="text-left hidden sm:block">
                     <p className="text-xs font-semibold text-slate-900 leading-none truncate max-w-[100px] lg:max-w-[120px]">
-                      {currentUser.name}
+                      {displayName}
                     </p>
                     <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[100px] lg:max-w-[120px]">
                       {currentUser.email}
@@ -155,7 +159,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     onClick={() => setRoleMenuOpen(false)}
                   >
                     <div className="px-3 py-2 border-b border-slate-100">
-                      <p className="font-semibold text-slate-900">{currentUser.name}</p>
+                      <p className="font-semibold text-slate-900">{displayName}</p>
                       <p className="text-slate-500 text-[11px] truncate">{currentUser.email}</p>
                       <p className="text-teal-600 font-medium text-[11px] capitalize mt-0.5">
                         Role: {currentUser.customRoleTitle || currentUser.role}

@@ -3,6 +3,7 @@ import { User, Appointment, AttendanceRecord, RevenueItem, ExpenseItem, UserRole
 import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
+import { getUserDisplayName, getUserInitials } from '../../utils/userDisplay';
 import { 
   IndianRupee, 
   TrendingUp, 
@@ -1075,10 +1076,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-teal-100 text-teal-800 font-bold flex items-center justify-center text-sm">
-                          {member.name.charAt(0)}
+                          {getUserInitials(getUserDisplayName(member.name, member.email, member.role))}
                         </div>
                         <div>
-                          <p className="font-bold text-slate-900 text-sm">{member.name}</p>
+                          <p className="font-bold text-slate-900 text-sm">
+                            {getUserDisplayName(member.name, member.email, member.role)}
+                          </p>
                           <span className="capitalize inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-white border border-slate-200 text-teal-800 mt-0.5">
                             {member.customRoleTitle || member.role}
                           </span>

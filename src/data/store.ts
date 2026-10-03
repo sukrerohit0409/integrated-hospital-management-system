@@ -19,6 +19,7 @@ import {
 } from './mockData';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { getUserDisplayName } from '../utils/userDisplay';
 
 const STORAGE_KEYS = {
   USERS: 'ihms_users',
@@ -257,7 +258,7 @@ export async function initializeSharedStore(): Promise<() => void> {
       const users: User[] = (profilesResult.data || []).map((profile) => ({
         ...(profile.details as Partial<User>),
         id: profile.id,
-        name: profile.name,
+        name: getUserDisplayName(profile.name, profile.email, profile.role as UserRole),
         email: profile.email,
         phone: profile.phone,
         role: profile.role as UserRole,

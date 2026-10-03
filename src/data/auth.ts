@@ -1,5 +1,6 @@
 import type { User, UserRole } from '../types';
 import { requireSupabase } from '../lib/supabase';
+import { getUserDisplayName } from '../utils/userDisplay';
 
 type Profile = {
   id: string;
@@ -35,7 +36,7 @@ export async function getSignedInProfile(): Promise<User | null> {
   return {
     ...data.details,
     id: data.id,
-    name: data.name,
+    name: getUserDisplayName(data.name, data.email, data.role),
     email: data.email,
     phone: data.phone,
     role: data.role,
