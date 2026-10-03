@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, Prescription } from '../../types';
 import { store } from '../../data/store';
+import { supabase } from '../../lib/supabase';
 import { 
   Calendar, 
   Clock, 
@@ -18,10 +19,16 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
-import { getLocalDateString } from '../../utils/date';
 
 interface PatientDashboardProps {
   currentUser: User | null;
+}
+
+function isBookedSlot(value: unknown): value is { time_slot: string } {
+  return typeof value === 'object'
+    && value !== null
+    && 'time_slot' in value
+    && typeof value.time_slot === 'string';
 }
 
 export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser }) => {
@@ -32,11 +39,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
   // Booking Flow State
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('All');
-  const [selectedDoctorId, setSelectedDoctorId] = useState<string>('u-doc-1');
-  const [bookingDate, setBookingDate] = useState<string>(() => getLocalDateString(1));
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
+  const [bookingDate, setBookingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [bookingSlot, setBookingSlot] = useState<string>('10:00 AM');
   const [bookingReason, setBookingReason] = useState<string>('');
   const [bookingSuccessToken, setBookingSuccessToken] = useState<string | null>(null);
+  const [bookedSlots, setBookedSlots] = useState<string[]>([]);
 
   // Print Prescription Modal
   const [printPrescription, setPrintPrescription] = useState<Prescription | null>(null);
@@ -51,6 +59,50 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
   const patientId = currentUser?.id || 'u-pat-1';
   const doctors = users.filter((u) => u.role === 'doctor');
+
+  React.useEffect(() => {
+    if (!doctors.some((doctor) => doctor.id === selectedDoctorId) && doctors.length > 0) {
+      setSelectedDoctorId(doctors[0].id);
+    }
+  }, [doctors, selectedDoctorId]);
+
+  React.useEffect(() => {
+    const client = supabase;
+    if (!client || !selectedDoctorId || !bookingDate) {
+      setBookedSlots([]);
+      return;
+    }
+    let active = true;
+    const refreshBookedSlots = async () => {
+      const { data, error } = await client.rpc('get_booked_slots', {
+        p_doctor_id: selectedDoctorId,
+        p_date: bookingDate,
+      });
+      if (!active) return;
+      if (error) {
+        console.error('Could not load appointment availability:', error);
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: 'Could not load the selected doctor’s available slots.',
+        }));
+        return;
+      }
+      const rows: unknown = data;
+      if (!Array.isArray(rows) || !rows.every(isBookedSlot)) {
+        console.error('Appointment availability returned an unexpected response.');
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: 'Appointment availability returned an invalid response.',
+        }));
+        return;
+      }
+      setBookedSlots(rows.map((row) => row.time_slot));
+    };
+    void refreshBookedSlots();
+    const interval = activeTab === 'book' ? window.setInterval(refreshBookedSlots, 15000) : undefined;
+    return () => {
+      active = false;
+      if (interval) window.clearInterval(interval);
+    };
+  }, [selectedDoctorId, bookingDate, activeTab]);
 
   // Filter patient's appointments
   const myAppointments = useMemo(() => {
@@ -80,11 +132,23 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
     '04:30 PM', '05:00 PM'
   ];
 
-  const handleBookAppointment = (e: React.FormEvent) => {
+  const handleBookAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
+    if (supabase && bookedSlots.includes(bookingSlot)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'That appointment slot has just been reserved. Choose another time.',
+      }));
+      return;
+    }
 
     const assignedDoctor = doctors.find((d) => d.id === selectedDoctorId) || doctors[0];
+    if (!assignedDoctor) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'No doctors are available for booking. Contact the hospital.',
+      }));
+      return;
+    }
 
     const newApt = store.addAppointment({
       patientId: currentUser.id,
@@ -105,34 +169,101 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
       feeAmount: 650,
     });
 
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Appointment booking did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Appointment could not be saved.',
+      }));
+      return;
+    }
     setBookingSuccessToken(newApt.tokenNumber);
     setBookingReason('');
   };
 
   // Follow-up direct booking action (as requested: "they patient have access to book appointment on that date or skip follow up")
-  const handleBookFollowUp = (apt: Appointment) => {
+  const handleBookFollowUp = async (apt: Appointment) => {
     if (!currentUser || !apt.prescription?.followUpDate) return;
 
-    store.addAppointment({
-      patientId: currentUser.id,
-      patientName: currentUser.name,
-      patientPhone: currentUser.phone,
-      patientEmail: currentUser.email,
-      patientAge: currentUser.age || 32,
-      patientGender: currentUser.gender || 'Male',
-      doctorId: apt.doctorId,
-      doctorName: apt.doctorName,
-      department: apt.department,
-      date: apt.prescription.followUpDate,
-      timeSlot: '10:00 AM',
-      type: 'follow_up',
-      status: 'scheduled',
-      reasonForVisit: `Follow-up visit for ${apt.prescription.diagnosis}`,
-      feeCollected: false,
-      feeAmount: 500,
-    });
+    let followUp = appointments.find(
+      (appointment) => appointment.followUpForAppointmentId === apt.id
+    );
+
+    if (!followUp) {
+      let timeSlot = '10:00 AM';
+      if (supabase) {
+        const { data, error } = await supabase.rpc('get_booked_slots', {
+          p_doctor_id: apt.doctorId,
+          p_date: apt.prescription.followUpDate,
+        });
+        if (error) {
+          console.error('Could not load follow-up appointment availability:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Could not load availability for this follow-up appointment.',
+          }));
+          return;
+        }
+        if (!Array.isArray(data) || !data.every(isBookedSlot)) {
+          console.error('Follow-up availability returned an unexpected response.');
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Follow-up availability returned an invalid response.',
+          }));
+          return;
+        }
+        const availableSlot = TIME_SLOTS.find(
+          (slot) => !data.some((booked) => booked.time_slot === slot)
+        );
+        if (!availableSlot) {
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'No appointment slots are available on the recommended follow-up date.',
+          }));
+          return;
+        }
+        timeSlot = availableSlot;
+      }
+
+      followUp = store.addAppointment({
+        patientId: currentUser.id,
+        patientName: currentUser.name,
+        patientPhone: currentUser.phone,
+        patientEmail: currentUser.email,
+        patientAge: currentUser.age || 32,
+        patientGender: currentUser.gender || 'Male',
+        doctorId: apt.doctorId,
+        doctorName: apt.doctorName,
+        department: apt.department,
+        date: apt.prescription.followUpDate,
+        timeSlot,
+        type: 'follow_up',
+        followUpForAppointmentId: apt.id,
+        status: 'scheduled',
+        reasonForVisit: `Follow-up visit for ${apt.prescription.diagnosis}`,
+        feeCollected: false,
+        feeAmount: 500,
+      });
+
+      try {
+        await store.flushPendingWrites();
+      } catch (error) {
+        console.error('Follow-up booking did not reach the shared database:', error);
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: error instanceof Error ? error.message : 'Follow-up could not be saved.',
+        }));
+        return;
+      }
+    }
 
     store.updateFollowUpStatus(apt.id, 'booked');
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Could not mark the follow-up as booked:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Follow-up status could not be updated.',
+      }));
+      return;
+    }
     alert(`Follow-up appointment booked with ${apt.doctorName} on ${apt.prescription.followUpDate}!`);
     setActiveTab('history');
   };
@@ -514,7 +645,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                     required
                     value={bookingDate}
                     onChange={(e) => setBookingDate(e.target.value)}
-                    min={getLocalDateString()}
+                    min={new Date().toISOString().split('T')[0]}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 bg-white"
                   />
                 </div>
@@ -545,13 +676,15 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {TIME_SLOTS.map((slot) => {
-                    const isBooked = appointments.some(
-                      (a) =>
-                        a.doctorId === selectedDoctorId &&
-                        a.date === bookingDate &&
-                        a.timeSlot === slot &&
-                        a.status !== 'cancelled'
-                    );
+                    const isBooked = supabase
+                      ? bookedSlots.includes(slot)
+                      : appointments.some(
+                        (a) =>
+                          a.doctorId === selectedDoctorId &&
+                          a.date === bookingDate &&
+                          a.timeSlot === slot &&
+                          a.status !== 'cancelled'
+                      );
 
                     return (
                       <button

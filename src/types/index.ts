@@ -73,6 +73,7 @@ export interface Appointment {
   date: string;
   timeSlot: string;
   type: 'online_booking' | 'walk_in' | 'follow_up';
+  followUpForAppointmentId?: string;
   status: 'scheduled' | 'waiting' | 'in_consultation' | 'completed' | 'cancelled';
   reasonForVisit: string;
   feeCollected: boolean;
@@ -92,7 +93,9 @@ export interface AttendanceRecord {
   customRoleTitle?: string;
   date: string;
   clockIn: string;
+  clockInAt?: string;
   clockOut?: string;
+  clockOutAt?: string;
   hoursWorked?: number;
   status: 'present' | 'half_day' | 'leave' | 'absent';
   notes?: string;

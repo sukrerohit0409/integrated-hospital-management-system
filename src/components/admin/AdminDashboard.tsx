@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, AttendanceRecord, RevenueItem, ExpenseItem, UserRole } from '../../types';
 import { store } from '../../data/store';
+import { manageStaffAccount } from '../../data/staffAccounts';
+import { supabase } from '../../lib/supabase';
 import { 
   IndianRupee, 
   TrendingUp, 
@@ -22,10 +24,10 @@ import {
 } from 'lucide-react';
 
 interface AdminDashboardProps {
-  onViewPrescription?: (apt: Appointment) => void;
+  currentUser: User;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'revenue' | 'expense' | 'attendance' | 'staff' | 'appointments'>('overview');
   
   // State from store
@@ -80,7 +82,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
     }) : undefined;
   }, []);
 
-  const todayStr = '2026-10-02';
+  const todayStr = new Date().toISOString().split('T')[0];
+  const weekStartStr = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
   // Revenue filtering logic
   const filteredRevenue = useMemo(() => {
@@ -91,14 +94,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       }
       if (revFilter === 'week') {
         // Last 7 days
-        return itemDate >= '2026-09-26' && itemDate <= todayStr;
+        return itemDate >= weekStartStr && itemDate <= todayStr;
       }
       if (revFilter === 'month') {
         // Current month (October)
-        return itemDate.startsWith('2026-10') || itemDate.startsWith('2026-09');
+        return itemDate.startsWith(todayStr.slice(0, 7));
       }
       if (revFilter === 'year') {
-        return itemDate.startsWith('2026');
+        return itemDate.startsWith(todayStr.slice(0, 4));
       }
       if (revFilter === 'custom') {
         if (revStartDate && itemDate < revStartDate) return false;
@@ -107,7 +110,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       }
       return true;
     });
-  }, [revenue, revFilter, revStartDate, revEndDate]);
+  }, [revenue, revFilter, revStartDate, revEndDate, todayStr, weekStartStr]);
 
   const totalFilteredRevenue = filteredRevenue.reduce((acc, cur) => acc + cur.amount, 0);
 
@@ -139,13 +142,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
         return itemDate === todayStr;
       }
       if (expFilter === 'week') {
-        return itemDate >= '2026-09-26' && itemDate <= todayStr;
+        return itemDate >= weekStartStr && itemDate <= todayStr;
       }
       if (expFilter === 'month') {
-        return itemDate.startsWith('2026-10') || itemDate.startsWith('2026-09');
+        return itemDate.startsWith(todayStr.slice(0, 7));
       }
       if (expFilter === 'year') {
-        return itemDate.startsWith('2026');
+        return itemDate.startsWith(todayStr.slice(0, 4));
       }
       if (expFilter === 'custom') {
         if (expStartDate && itemDate < expStartDate) return false;
@@ -154,7 +157,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       }
       return true;
     });
-  }, [expenses, expFilter, expStartDate, expEndDate]);
+  }, [expenses, expFilter, expStartDate, expEndDate, todayStr, weekStartStr]);
 
   const totalFilteredExpense = filteredExpenses.reduce((acc, cur) => acc + cur.amount, 0);
 
@@ -188,22 +191,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
     return map;
   }, [attendance]);
 
-  const handleAddStaff = (e: React.FormEvent) => {
+  const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaffName || !newStaffEmail || !newStaffPhone) return;
 
-    store.addUser({
-      name: newStaffName,
-      email: newStaffEmail,
-      phone: newStaffPhone,
-      role: newStaffRole,
-      customRoleTitle: newStaffRole === 'other' ? customRoleTitle : undefined,
-      department: newStaffDept,
-      age: parseInt(newStaffAge) || 30,
-      gender: newStaffGender,
-      status: 'active',
-      password: newStaffEmail, // default is their email as instructed
-    });
+    try {
+      if (supabase) {
+        await manageStaffAccount({
+          action: 'invite',
+          name: newStaffName,
+          email: newStaffEmail,
+          phone: newStaffPhone,
+          role: newStaffRole,
+          customRoleTitle: newStaffRole === 'other' ? customRoleTitle : undefined,
+          department: newStaffDept,
+          age: parseInt(newStaffAge, 10) || 30,
+          gender: newStaffGender,
+        });
+      } else {
+        store.addUser({
+          name: newStaffName,
+          email: newStaffEmail,
+          phone: newStaffPhone,
+          role: newStaffRole,
+          customRoleTitle: newStaffRole === 'other' ? customRoleTitle : undefined,
+          department: newStaffDept,
+          age: parseInt(newStaffAge, 10) || 30,
+          gender: newStaffGender,
+          status: 'active',
+          password: newStaffEmail,
+        });
+      }
+    } catch (error) {
+      console.error('Could not create staff account:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Could not create the staff account.',
+      }));
+      return;
+    }
 
     setShowAddStaffModal(false);
     setNewStaffName('');
@@ -214,14 +239,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
 
   const handleDeleteStaff = (id: string, name: string) => {
     if (confirm(`Are you sure you want to remove staff member: ${name}?`)) {
-      store.deleteUser(id);
+      if (supabase) {
+        void manageStaffAccount({ action: 'remove', id }).catch((error: unknown) => {
+          console.error('Could not remove staff account:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: error instanceof Error ? error.message : 'Could not remove the staff account.',
+          }));
+        });
+      } else {
+        store.deleteUser(id);
+      }
     }
   };
 
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(expAmount);
-    if (!amt || !expDescription) return;
+    if (!Number.isFinite(amt) || amt <= 0 || !expDescription.trim()) {
+      const message = 'Enter a positive expense amount and a description.';
+      if (supabase) {
+        window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: message }));
+      } else {
+        window.alert(message);
+      }
+      return;
+    }
 
     store.addExpense({
       date: todayStr,
@@ -230,10 +272,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       category: expCategory,
       description: expDescription,
       vendor: expVendor || 'Authorized Vendor',
-      approvedBy: 'Rohit Sukre (Admin)',
+      approvedBy: currentUser.name,
       status: 'paid',
     });
 
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Expense did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Expense could not be saved.',
+      }));
+      return;
+    }
     setShowAddExpenseModal(false);
     setExpAmount('');
     setExpDescription('');
@@ -1341,6 +1392,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = () => {
                 <input
                   type="number"
                   required
+                  min="0.01"
+                  step="0.01"
                   placeholder="e.g. 2500"
                   value={expAmount}
                   onChange={(e) => setExpAmount(e.target.value)}

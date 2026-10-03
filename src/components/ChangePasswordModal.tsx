@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { store } from '../data/store';
+import { supabase } from '../lib/supabase';
 import { X, KeyRound, CheckCircle2, ShieldAlert } from 'lucide-react';
 
 interface ChangePasswordModalProps {
@@ -22,25 +23,46 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
 
   if (!isOpen || !currentUser) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccess(false);
 
     const actualCurrentPass = currentUser.password || currentUser.email;
-
-    if (currentPassword !== actualCurrentPass) {
+    if (!supabase && currentPassword !== actualCurrentPass) {
       setError('Current password does not match our records.');
       return;
     }
 
-    if (newPassword.length < 4) {
-      setError('New password must be at least 4 characters long.');
+    if (newPassword.length < (supabase ? 8 : 4)) {
+      setError(`New password must be at least ${supabase ? 8 : 4} characters long.`);
       return;
     }
 
     if (newPassword !== confirmPassword) {
       setError('New password and confirm password do not match.');
+      return;
+    }
+
+    if (supabase) {
+      const { error: verificationError } = await supabase.auth.signInWithPassword({
+        email: currentUser.email,
+        password: currentPassword,
+      });
+      if (verificationError) {
+        setError('Current password does not match our records.');
+        return;
+      }
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      if (updateError) {
+        setError(updateError.message);
+        return;
+      }
+      setSuccess(true);
+      setTimeout(() => {
+        setSuccess(false);
+        onClose();
+      }, 1400);
       return;
     }
 

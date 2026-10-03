@@ -17,6 +17,8 @@ import {
   INITIAL_EXPENSES,
   INITIAL_LEAVES,
 } from './mockData';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
 
 const STORAGE_KEYS = {
   USERS: 'ihms_users',
@@ -28,39 +30,25 @@ const STORAGE_KEYS = {
   LEAVES: 'ihms_leaves',
 };
 
-const SYNCED_COLLECTIONS = [
-  STORAGE_KEYS.USERS,
-  STORAGE_KEYS.APPOINTMENTS,
-  STORAGE_KEYS.ATTENDANCE,
-  STORAGE_KEYS.REVENUE,
-  STORAGE_KEYS.EXPENSES,
-  STORAGE_KEYS.LEAVES,
-] as const;
-
-const SHARED_DATA_ENABLED = import.meta.env.VITE_SHARED_DEMO_DATA === 'true';
-
-type SharedRecord = {
-  collection: string;
-  record_id: string;
-  data: { id: string };
-  updated_at: string;
-};
-
-let pendingSyncWrites = 0;
-let refreshInProgress = false;
-let sharedDataError: string | null = null;
-let syncWriteQueue: Promise<void> = Promise.resolve();
-
 type Listener = () => void;
 const listeners = new Set<Listener>();
+let loadingSharedData = false;
+let sharedWriteQueue: Promise<void> = Promise.resolve();
+let sharedDataRefresher: (() => Promise<void>) | null = null;
+let sharedChannel: RealtimeChannel | null = null;
+let sharedChannelUsers = 0;
+const sharedWriteErrors: string[] = [];
+
+const SHARED_DATASETS: Record<string, string> = {
+  [STORAGE_KEYS.APPOINTMENTS]: 'appointments',
+  [STORAGE_KEYS.ATTENDANCE]: 'attendance',
+  [STORAGE_KEYS.REVENUE]: 'revenue',
+  [STORAGE_KEYS.EXPENSES]: 'expenses',
+  [STORAGE_KEYS.LEAVES]: 'leaves',
+};
 
 function notify() {
   listeners.forEach((listener) => listener());
-}
-
-function setSharedDataError(message: string | null): void {
-  sharedDataError = message;
-  notify();
 }
 
 export function subscribe(listener: Listener) {
@@ -86,180 +74,313 @@ function setStored<T>(key: string, value: T): void {
     const previous = localStorage.getItem(key);
     localStorage.setItem(key, JSON.stringify(value));
     notify();
-
-    if (SHARED_DATA_ENABLED && SYNCED_COLLECTIONS.includes(key as typeof SYNCED_COLLECTIONS[number])) {
-      const oldRecords = previous ? JSON.parse(previous) as { id: string }[] : [];
-      const newRecords = Array.isArray(value) ? value as { id: string }[] : [];
-      const oldById = new Map(oldRecords.map((record) => [record.id, JSON.stringify(record)]));
-      const newIds = new Set(newRecords.map((record) => record.id));
-      const changedRecords = newRecords.filter(
-        (record) => oldById.get(record.id) !== JSON.stringify(record),
+    const dataset = SHARED_DATASETS[key];
+    if (dataset && supabase && !loadingSharedData) {
+      const actorId = getStored<User | null>(STORAGE_KEYS.CURRENT_USER, null)?.id;
+      sharedWriteQueue = sharedWriteQueue.then(() =>
+        persistSharedRecords(dataset, previous, value, actorId)
       );
-      const deletedIds = oldRecords
-        .filter((record) => !newIds.has(record.id))
-        .map((record) => record.id);
-
-      if (changedRecords.length > 0 || deletedIds.length > 0) {
-        queueSharedUpdate(key, changedRecords, deletedIds);
-      }
     }
   } catch (err) {
     console.error(`Error saving ${key}:`, err);
   }
 }
 
-async function loadSharedRecords(): Promise<SharedRecord[]> {
-  const response = await fetch('/api/demo-state');
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Shared-data load failed (${response.status}).`);
+function recordOwner(dataset: string, record: Record<string, unknown>): string | null {
+    if (dataset === 'appointments') return String(record.patientId || '');
+    if (dataset === 'attendance' || dataset === 'leaves') return String(record.staffId || '');
+    return null;
+}
+
+function createRecordId(prefix: string): string {
+  const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${id}`;
+}
+
+function parseAttendanceClockIn(record: AttendanceRecord): Date | null {
+  if (record.clockInAt) {
+    const timestamp = new Date(record.clockInAt);
+    return Number.isNaN(timestamp.getTime()) ? null : timestamp;
   }
-  return response.json() as Promise<SharedRecord[]>;
+
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i.exec(record.clockIn.trim());
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+  const meridiem = match[4]?.toUpperCase();
+  if (meridiem) {
+    if (hours < 1 || hours > 12) return null;
+    hours = (hours % 12) + (meridiem === 'PM' ? 12 : 0);
+  }
+  if (hours > 23 || minutes > 59 || seconds > 59) return null;
+
+  const [year, month, day] = record.date.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const timestamp = new Date(year, month - 1, day, hours, minutes, seconds);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
 }
 
-function setLocalCollection(key: string, records: { id: string }[]): void {
-  localStorage.setItem(key, JSON.stringify(records));
-}
-
-function queueSharedUpdate(
-  collection: string,
-  records: { id: string }[],
-  deletedIds: string[],
-): void {
-  pendingSyncWrites += 1;
-  syncWriteQueue = syncWriteQueue
-    .then(async () => {
-      const response = await fetch('/api/demo-state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, records, deletedIds }),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || `Shared-data update failed (${response.status}).`);
+async function persistSharedRecords(
+  dataset: string,
+  previousJson: string | null,
+  value: unknown,
+  actorId: string | undefined
+): Promise<void> {
+    if (!supabase || !Array.isArray(value)) return;
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!actorId || user?.id !== actorId) {
+        throw new Error('The signed-in account changed before this update could be saved.');
       }
-      setSharedDataError(null);
-    })
-    .catch((error: unknown) => {
-      console.error(`Could not sync ${collection} with the shared database:`, error);
-      setSharedDataError(
-        error instanceof Error
-          ? error.message
-          : `Could not sync ${collection} with the shared database.`,
+      const previous = previousJson ? JSON.parse(previousJson) as Array<Record<string, unknown>> : [];
+      const next = value as Array<Record<string, unknown>>;
+      const previousById = new Map(previous.map((record) => [String(record.id), record]));
+      const changed = next.filter((record) =>
+        JSON.stringify(previousById.get(String(record.id))) !== JSON.stringify(record)
       );
-    })
-    .finally(() => {
-      pendingSyncWrites -= 1;
-    });
+      if (dataset === 'appointments') {
+        const prescriptions = changed
+          .filter((record) =>
+            record.prescription
+            && JSON.stringify(previousById.get(String(record.id))?.prescription)
+              !== JSON.stringify(record.prescription)
+          )
+          .map((record) => ({
+            appointment_id: String(record.id),
+            patient_id: String(record.patientId),
+            doctor_id: String(record.doctorId),
+            payload: record.prescription,
+          }));
+        if (prescriptions.length) {
+          const { error } = await supabase.from('ihms_prescriptions').upsert(prescriptions, {
+            onConflict: 'appointment_id',
+          });
+          if (error) throw error;
+        }
+        const removedPrescriptions = changed
+          .filter((record) => !record.prescription && previousById.get(String(record.id))?.prescription)
+          .map((record) => String(record.id));
+        if (removedPrescriptions.length) {
+          const { error } = await supabase
+            .from('ihms_prescriptions')
+            .delete()
+            .in('appointment_id', removedPrescriptions);
+          if (error) throw error;
+        }
+      }
+      if (changed.length) {
+        const rows = changed.map((record) => ({
+          record_type: dataset,
+          record_id: String(record.id),
+          owner_id: recordOwner(dataset, record),
+          doctor_id: dataset === 'appointments' ? String(record.doctorId || '') : null,
+          payload: dataset === 'appointments'
+            ? Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'prescription'))
+            : record,
+        }));
+        const { error } = await supabase.from('ihms_records').upsert(rows, {
+          onConflict: 'record_type,record_id',
+        });
+        if (error) throw error;
 }
 
-async function refreshSharedData(seedMissingCollections: boolean): Promise<void> {
-  if (!SHARED_DATA_ENABLED || refreshInProgress || pendingSyncWrites > 0) return;
-  refreshInProgress = true;
-
-  try {
-    const remoteRecords = await loadSharedRecords();
-    if (pendingSyncWrites > 0) return;
-    const grouped = new Map<string, SharedRecord[]>();
-    for (const key of SYNCED_COLLECTIONS) grouped.set(key, []);
-    for (const record of remoteRecords) {
-      grouped.get(record.collection)?.push(record);
-    }
-
-    const initialized = remoteRecords.some((record) => record.collection === 'ihms_settings');
-    for (const key of SYNCED_COLLECTIONS) {
-      const records = grouped.get(key) || [];
-      if (records.length === 0 && seedMissingCollections && !initialized) {
-        const fallback = getStored(key, getInitialCollection(key));
-        setLocalCollection(key, fallback);
-        await fetch('/api/demo-state', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            collection: key,
-            records: fallback,
-            deletedIds: [],
-          }),
-        }).then(async (response) => {
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            throw new Error(body.error || `Could not initialize ${key} (${response.status}).`);
-          }
-        });
-      } else {
-        setLocalCollection(
-          key,
-          records.map((record) => record.data),
-        );
+      const nextIds = new Set(next.map((record) => String(record.id)));
+      const removedIds = previous
+        .map((record) => String(record.id))
+        .filter((id) => !nextIds.has(id));
+      if (removedIds.length) {
+        const { error } = await supabase
+          .from('ihms_records')
+          .delete()
+          .eq('record_type', dataset)
+          .in('record_id', removedIds);
+        if (error) throw error;
+      }
+    } catch (error) {
+      const message = `Unable to save ${dataset.replace('_', ' ')}. Your change may not be shared with other users.`;
+      console.error(`Unable to save ${dataset} to Supabase:`, error);
+      sharedWriteErrors.push(message);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: message,
+      }));
+      if (sharedDataRefresher) {
+        try {
+          await sharedDataRefresher();
+        } catch (refreshError) {
+          console.error('Could not reload the persisted hospital data after a failed save:', refreshError);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'The failed change could not be rolled back from the database. Reload before continuing.',
+          }));
+        }
       }
     }
-
-    if (!initialized) {
-      const response = await fetch('/api/demo-state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          collection: 'ihms_settings',
-          records: [{ id: 'initialized' }],
-          deletedIds: [],
-        }),
-      });
-      if (!response.ok) throw new Error('Could not mark shared demo data as initialized.');
-    }
-
-    setSharedDataError(null);
-    notify();
-  } finally {
-    refreshInProgress = false;
   }
+
+function saveHydratedData(key: string, value: unknown): void {
+    localStorage.setItem(key, JSON.stringify(value));
 }
 
-function getInitialCollection(key: string): { id: string }[] {
-  switch (key) {
-    case STORAGE_KEYS.USERS: return INITIAL_USERS;
-    case STORAGE_KEYS.APPOINTMENTS: return INITIAL_APPOINTMENTS;
-    case STORAGE_KEYS.ATTENDANCE: return INITIAL_ATTENDANCE;
-    case STORAGE_KEYS.REVENUE: return INITIAL_REVENUE;
-    case STORAGE_KEYS.EXPENSES: return INITIAL_EXPENSES;
-    case STORAGE_KEYS.LEAVES: return INITIAL_LEAVES;
-    default: return [];
-  }
+export function clearSharedStore(): void {
+  sharedDataRefresher = null;
+    for (const key of [STORAGE_KEYS.USERS, STORAGE_KEYS.CURRENT_USER, ...Object.keys(SHARED_DATASETS)]) {
+      localStorage.removeItem(key);
+    }
+    notify();
+}
+
+export async function initializeSharedStore(): Promise<() => void> {
+    if (!supabase) return () => undefined;
+
+    const client = supabase;
+    const refresh = async () => {
+      const { data: { user }, error: authError } = await client.auth.getUser();
+      if (authError) throw authError;
+      if (!user) {
+        clearSharedStore();
+        return;
+      }
+
+      const [recordsResult, profilesResult, prescriptionsResult] = await Promise.all([
+        client.from('ihms_records').select('record_type,record_id,payload'),
+        client.from('profiles').select('id,name,email,phone,role,details,created_at'),
+        client.from('ihms_prescriptions').select('appointment_id,payload'),
+      ]);
+      if (recordsResult.error) throw recordsResult.error;
+      if (profilesResult.error) throw profilesResult.error;
+      if (prescriptionsResult.error) throw prescriptionsResult.error;
+
+      const users: User[] = (profilesResult.data || []).map((profile) => ({
+        ...(profile.details as Partial<User>),
+        id: profile.id,
+        name: profile.name,
+        email: profile.email,
+        phone: profile.phone,
+        role: profile.role as UserRole,
+        isOnline: false,
+        status: (profile.details as Partial<User>).status || 'active',
+        createdAt: profile.created_at,
+      }));
+      const rows = recordsResult.data || [];
+      const datasets: Array<[string, string]> = [
+        [STORAGE_KEYS.APPOINTMENTS, 'appointments'],
+        [STORAGE_KEYS.ATTENDANCE, 'attendance'],
+        [STORAGE_KEYS.REVENUE, 'revenue'],
+        [STORAGE_KEYS.EXPENSES, 'expenses'],
+        [STORAGE_KEYS.LEAVES, 'leaves'],
+      ];
+
+      loadingSharedData = true;
+      try {
+        saveHydratedData(STORAGE_KEYS.USERS, users);
+        for (const [key, dataset] of datasets) {
+          let records = rows
+            .filter((row) => row.record_type === dataset)
+            .map((row) => row.payload);
+          if (dataset === 'appointments') {
+            const prescriptions = new Map(
+              (prescriptionsResult.data || []).map((row) => [row.appointment_id, row.payload])
+            );
+            records = records.map((record) => ({
+              ...(record as Record<string, unknown>),
+              ...(prescriptions.has(String((record as Record<string, unknown>).id))
+                ? { prescription: prescriptions.get(String((record as Record<string, unknown>).id)) }
+                : {}),
+            }));
+          }
+          saveHydratedData(key, records);
+        }
+      } finally {
+        loadingSharedData = false;
+      }
+      notify();
+    };
+
+    sharedDataRefresher = refresh;
+    await refresh();
+    if (!sharedChannel) {
+      const channel = client.channel(createRecordId('ihms-shared-records'));
+      channel
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_records' }, () => {
+          void refresh().catch((error: unknown) => {
+            console.error('Unable to refresh shared hospital data:', error);
+            window.dispatchEvent(new CustomEvent('ihms:data-error', {
+              detail: 'Could not refresh shared hospital data. Reload the page and try again.',
+            }));
+          });
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_prescriptions' }, () => {
+          void refresh().catch((error: unknown) => {
+            console.error('Unable to refresh prescriptions:', error);
+            window.dispatchEvent(new CustomEvent('ihms:data-error', {
+              detail: 'Could not refresh shared prescriptions. Reload the page and try again.',
+            }));
+          });
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+          void refresh().catch((error: unknown) => console.error('Unable to refresh profiles:', error));
+        });
+      sharedChannel = channel;
+      channel.subscribe();
+    }
+    sharedChannelUsers += 1;
+
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      sharedChannelUsers -= 1;
+      if (sharedChannelUsers === 0 && sharedChannel) {
+        const channelToRemove = sharedChannel;
+        sharedChannel = null;
+        void client.removeChannel(channelToRemove);
+      }
+    };
 }
 
 // Store API
 export const store = {
   subscribe: (listener: Listener) => subscribe(listener),
-  getSyncError: () => sharedDataError,
-
-  initialize: async () => {
-    if (!SHARED_DATA_ENABLED) return;
-    await refreshSharedData(true);
-    window.setInterval(() => {
-      void refreshSharedData(false).catch((error: unknown) => {
-        console.error('Could not refresh shared demo data:', error);
-        setSharedDataError(
-          error instanceof Error ? error.message : 'Could not refresh shared demo data.',
-        );
-      });
-    }, 4000);
+  flushPendingWrites: async () => {
+    await sharedWriteQueue;
+    if (sharedWriteErrors.length) {
+      throw new Error(sharedWriteErrors.splice(0).join(' '));
+    }
   },
 
   // Reset all to fresh mock data
   resetAll: () => {
-    setStored(STORAGE_KEYS.USERS, INITIAL_USERS);
+    localStorage.removeItem(STORAGE_KEYS.USERS);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-    setStored(STORAGE_KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS);
-    setStored(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
-    setStored(STORAGE_KEYS.REVENUE, INITIAL_REVENUE);
-    setStored(STORAGE_KEYS.EXPENSES, INITIAL_EXPENSES);
-    setStored(STORAGE_KEYS.LEAVES, INITIAL_LEAVES);
+    localStorage.removeItem(STORAGE_KEYS.APPOINTMENTS);
+    localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
+    localStorage.removeItem(STORAGE_KEYS.REVENUE);
+    localStorage.removeItem(STORAGE_KEYS.EXPENSES);
+    localStorage.removeItem(STORAGE_KEYS.LEAVES);
+    notify();
   },
 
   // USERS
   getUsers: (): User[] => getStored<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS),
 
-  getCurrentUser: (): User | null =>
-    getStored<User | null>(STORAGE_KEYS.CURRENT_USER, null),
+  getCurrentUser: (): User | null => {
+    const currentUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    if (currentUser !== null) {
+      try {
+        return JSON.parse(currentUser) as User | null;
+      } catch (err) {
+        console.error('Error loading current user:', err);
+        return null;
+      }
+    }
+    // Default to admin for convenience
+    const users = store.getUsers();
+    return users.find((u) => u.role === 'admin') || users[0];
+  },
 
   setCurrentUser: (user: User | null) => {
     setStored(STORAGE_KEYS.CURRENT_USER, user);
@@ -269,7 +390,7 @@ export const store = {
     const users = store.getUsers();
     const newUser: User = {
       ...userData,
-      id: `u-${Date.now().toString(36)}`,
+      id: createRecordId('u'),
       createdAt: new Date().toISOString().split('T')[0],
       isOnline: false,
       status: userData.status || 'active',
@@ -319,11 +440,10 @@ export const store = {
 
   addAppointment: (apt: Omit<Appointment, 'id' | 'tokenNumber' | 'createdAt'>): Appointment => {
     const appointments = store.getAppointments();
-    const countToday = appointments.length + 1;
     const newApt: Appointment = {
       ...apt,
-      id: `apt-${Date.now().toString(36)}`,
-      tokenNumber: `T-${100 + countToday}`,
+      id: createRecordId('apt'),
+      tokenNumber: `T-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
       status: apt.status || 'scheduled',
       followUpStatus: 'pending',
@@ -388,7 +508,7 @@ export const store = {
     const appointments = store.getAppointments();
     const newRx: Prescription = {
       ...prescriptionData,
-      id: `rx-${Date.now().toString(36)}`,
+      id: createRecordId('rx'),
       appointmentId,
     };
 
@@ -431,13 +551,14 @@ export const store = {
     }
 
     const newRecord: AttendanceRecord = {
-      id: `att-${Date.now().toString(36)}`,
+      id: createRecordId('att'),
       staffId,
       staffName,
       role,
       customRoleTitle,
       date: today,
       clockIn: timeNow,
+      clockInAt: new Date().toISOString(),
       hoursWorked: 0,
       status: 'present',
       notes: notes || 'Standard shift clock-in',
@@ -451,16 +572,23 @@ export const store = {
     const records = store.getAttendance();
     const today = new Date().toISOString().split('T')[0];
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const clockOutAt = new Date();
 
     let updatedRecord: AttendanceRecord | null = null;
     const updated = records.map((r) => {
       if (r.staffId === staffId && r.date === today && !r.clockOut) {
-        // Calculate rough hours
-        const diffHours = 7.5; // realistic full/partial shift calculated
+        const clockInAt = parseAttendanceClockIn(r);
+        if (!clockInAt || clockInAt > clockOutAt) {
+          const message = 'Could not calculate this shift duration from its clock-in time.';
+          console.error(message, r);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: message }));
+          return r;
+        }
         updatedRecord = {
           ...r,
           clockOut: timeNow,
-          hoursWorked: r.hoursWorked && r.hoursWorked > 0 ? r.hoursWorked : diffHours,
+          clockOutAt: clockOutAt.toISOString(),
+          hoursWorked: Math.round((clockOutAt.getTime() - clockInAt.getTime()) / 36_000) / 100,
           notes: notes ? `${r.notes || ''} | Out: ${notes}` : r.notes,
         };
         return updatedRecord;
@@ -480,7 +608,7 @@ export const store = {
     const list = store.getRevenue();
     const newItem: RevenueItem = {
       ...item,
-      id: `rev-${Date.now().toString(36)}`,
+      id: createRecordId('rev'),
     };
     setStored(STORAGE_KEYS.REVENUE, [newItem, ...list]);
     return newItem;
@@ -494,7 +622,7 @@ export const store = {
     const list = store.getExpenses();
     const newItem: ExpenseItem = {
       ...item,
-      id: `exp-${Date.now().toString(36)}`,
+      id: createRecordId('exp'),
     };
     setStored(STORAGE_KEYS.EXPENSES, [newItem, ...list]);
     return newItem;
@@ -508,7 +636,7 @@ export const store = {
     const leaves = store.getLeaves();
     const newLeave: LeaveRequest = {
       ...leave,
-      id: `lv-${Date.now().toString(36)}`,
+      id: createRecordId('lv'),
       status: 'pending',
       appliedAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
     };

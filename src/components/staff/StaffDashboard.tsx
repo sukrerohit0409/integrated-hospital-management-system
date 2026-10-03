@@ -36,7 +36,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
     }) : undefined;
   }, []);
 
-  const todayStr = '2026-10-02';
+  const todayStr = new Date().toISOString().split('T')[0];
   const staffId = currentUser?.id || 'u-nurse-1';
 
   // "staff has access for attendance of only that user and working hour ,day tracking"
@@ -76,6 +76,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
   const handleApplyLeave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !leaveStart || !leaveEnd || !leaveReason) return;
+    if (leaveEnd < leaveStart) {
+      window.alert('The leave end date must be on or after the start date.');
+      return;
+    }
 
     store.applyLeave({
       staffId: currentUser.id,
@@ -267,7 +271,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
                         {rec.clockOut || <span className="text-teal-600 font-sans italic">Ongoing</span>}
                       </td>
                       <td className="py-2.5 px-4 font-mono font-bold text-slate-900 tabular-nums">
-                        {rec.hoursWorked ? `${rec.hoursWorked.toFixed(1)} hrs` : 'In Progress'}
+                        {rec.clockOut
+                          ? `${(rec.hoursWorked ?? 0).toFixed(1)} hrs`
+                          : 'In Progress'}
                       </td>
                       <td className="py-2.5 px-4">
                         <span className="inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-800">

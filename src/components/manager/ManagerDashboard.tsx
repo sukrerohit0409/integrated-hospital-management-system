@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { User, AttendanceRecord, LeaveRequest, UserRole } from '../../types';
 import { store } from '../../data/store';
+import { manageStaffAccount } from '../../data/staffAccounts';
+import { supabase } from '../../lib/supabase';
 import { 
   Eye, 
   Users, 
@@ -16,7 +18,7 @@ import {
   Activity
 } from 'lucide-react';
 
-export const ManagerDashboard: React.FC = () => {
+export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState<'eyes_on_staff' | 'attendance' | 'staff_control' | 'leaves'>('eyes_on_staff');
 
   const [users, setUsers] = useState<User[]>(() => store.getUsers());
@@ -47,7 +49,7 @@ export const ManagerDashboard: React.FC = () => {
     }) : undefined;
   }, []);
 
-  const todayStr = '2026-10-02';
+  const todayStr = new Date().toISOString().split('T')[0];
   const staffMembers = users.filter((u) => u.role !== 'patient');
 
   // Staff working hours & working days calculation
@@ -71,22 +73,44 @@ export const ManagerDashboard: React.FC = () => {
     return map;
   }, [attendance, staffMembers]);
 
-  const handleAddStaff = (e: React.FormEvent) => {
+  const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !email || !phone) return;
 
-    store.addUser({
-      name,
-      email,
-      phone,
-      role,
-      customRoleTitle: role === 'other' ? customRoleTitle : undefined,
-      department,
-      age: parseInt(age) || 30,
-      gender,
-      status: 'active',
-      password: email, // default password is email as instructed
-    });
+    try {
+      if (supabase) {
+        await manageStaffAccount({
+          action: 'invite',
+          name,
+          email,
+          phone,
+          role,
+          customRoleTitle: role === 'other' ? customRoleTitle : undefined,
+          department,
+          age: parseInt(age, 10) || 30,
+          gender,
+        });
+      } else {
+        store.addUser({
+          name,
+          email,
+          phone,
+          role,
+          customRoleTitle: role === 'other' ? customRoleTitle : undefined,
+          department,
+          age: parseInt(age, 10) || 30,
+          gender,
+          status: 'active',
+          password: email,
+        });
+      }
+    } catch (error) {
+      console.error('Could not invite staff account:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Could not create the staff account.',
+      }));
+      return;
+    }
 
     setShowAddStaffModal(false);
     setName('');
@@ -97,20 +121,38 @@ export const ManagerDashboard: React.FC = () => {
 
   const handleDeleteStaff = (id: string, staffName: string) => {
     if (confirm(`Remove staff member ${staffName}?`)) {
-      store.deleteUser(id);
+      if (supabase) {
+        void manageStaffAccount({ action: 'remove', id }).catch((error: unknown) => {
+          console.error('Could not remove staff account:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: error instanceof Error ? error.message : 'Could not remove the staff account.',
+          }));
+        });
+      } else {
+        store.deleteUser(id);
+      }
     }
   };
 
   const handleUpdateStatus = (id: string, status: User['status']) => {
-    store.updateUser(id, { status });
+    if (supabase) {
+      void manageStaffAccount({ action: 'status', id, status }).catch((error: unknown) => {
+        console.error('Could not update staff status:', error);
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: error instanceof Error ? error.message : 'Could not update staff status.',
+        }));
+      });
+    } else {
+      store.updateUser(id, { status });
+    }
   };
 
   const handleApproveLeave = (id: string) => {
-    store.updateLeaveStatus(id, 'approved', 'Vikram Mehta (Manager)');
+    store.updateLeaveStatus(id, 'approved', currentUser.name);
   };
 
   const handleRejectLeave = (id: string) => {
-    store.updateLeaveStatus(id, 'rejected', 'Vikram Mehta (Manager)');
+    store.updateLeaveStatus(id, 'rejected', currentUser.name);
   };
 
   return (
@@ -665,7 +707,7 @@ export const ManagerDashboard: React.FC = () => {
                     onChange={(e) => setRole(e.target.value as UserRole)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 capitalize"
                   >
-                    <option value="manager">Manager</option>
+                    {!supabase && <option value="manager">Manager</option>}
                     <option value="receptionist">Receptionist</option>
                     <option value="nurse">Nurse</option>
                     <option value="cleaner">Cleaner</option>

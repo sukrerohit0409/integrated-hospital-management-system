@@ -22,24 +22,26 @@ A comprehensive, role-based hospital management web application built with **Rea
 | Build Tool | Vite 8 |
 | Icons | Lucide React |
 | Animation | Motion (Framer Motion) |
-| Data Store | Browser localStorage; optional shared Neon PostgreSQL database for the Vercel demo |
+| Authentication | Supabase Auth (when configured) |
+| User profiles | Supabase PostgreSQL with Row Level Security |
+| Dashboard records | Supabase PostgreSQL with Row Level Security and Realtime |
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Node.js** v20.19+ or v22.12+
+- **Node.js** v20.19+ or v22.12+ (Vite 8 requirement)
 - **npm** v9 or higher
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/ihms-project.git
-cd ihms-project
+git clone https://github.com/<your-username>/pulsecare-ihms.git
+cd pulsecare-ihms
 
 # Install dependencies
-npm install --legacy-peer-deps
+npm ci
 
 # Start the development server
 npm run dev
@@ -54,19 +56,11 @@ npm run build
 npm run start
 ```
 
-### Share demo data across browsers with Vercel and Neon
+GitHub Actions runs `npm ci`, the TypeScript check, and the production build for every push and pull request.
 
-By default, each browser stores its own data in `localStorage`. To share users, appointments, attendance, billing, expenses, and leave data between browsers:
+## Local demo mode
 
-1. In the Vercel dashboard, open the project and choose **Storage** or **Marketplace**, then create/connect a **Neon Postgres** database.
-2. Open the connected Neon database's SQL editor and run [`database/schema.sql`](./database/schema.sql).
-3. In Vercel **Project → Settings → Environment Variables**, set `VITE_SHARED_DEMO_DATA` to `true` for the environments you deploy.
-4. Confirm the Neon integration added a server-side connection variable named `POSTGRES_URL` or `DATABASE_URL`. The API accepts either of those, or `POSTGRES_URL_NON_POOLING`. Never prefix the database URL with `VITE_`.
-5. Redeploy the project.
-
-The demo API polls for shared changes every four seconds. The initial mock records are copied into Neon the first time the shared store is initialized. The API is intentionally public for this demo, so anyone with the deployed URL can view and modify its demo records. Do not use it for real patient data.
-
-## Demo Credentials
+Without Supabase environment variables, development mode uses browser-local demo data. These accounts are public sample credentials and must never be used for real patient or hospital information. With Supabase configured, dashboards load from the shared database and new changes are synchronized to other signed-in users; the app does not import browser demo records into Supabase.
 
 | Role | Email | Password |
 |------|-------|----------|
@@ -77,10 +71,64 @@ The demo API polls for shared changes every four seconds. The initial mock recor
 | Nurse | priya@gmail.com | priya@gmail.com |
 | Patient | rahul@gmail.com | rahul@gmail.com |
 
+## Supabase authentication setup
+
+### Create and configure the database
+
+1. Create a Supabase project and save its database password securely. Select the region closest to the hospital and wait until the project is ready.
+2. In **Project Settings → API**, copy the Project URL and the publishable/anon key. The browser uses only these public values; never use the service-role key in frontend code.
+3. Open **SQL Editor → New query**, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. Use a clean Supabase database for a new deployment. The script also supports the earlier auth-only schema; back up existing production data before applying schema upgrades.
+4. In **Table Editor**, verify that `profiles`, `ihms_records`, and `ihms_prescriptions` exist. In **Database → Publications**, verify that the tables are part of `supabase_realtime` (the script adds them). Keep Row Level Security enabled on all three tables; the script creates their role/ownership policies.
+5. In **Authentication → URL Configuration**, set the Site URL to your production Vercel URL and add the local and deployment callback URLs to Redirect URLs, for example `http://localhost:3000/**` and `https://<your-project>.vercel.app/**`. Add your custom domain and preview domain patterns if used. Configure email confirmation; configure a production SMTP provider before inviting real users.
+
+### Connect the application and bootstrap its first admin
+
+6. Copy `.env.example` to `.env.local`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for local browser access. Keep `SUPABASE_SERVICE_ROLE_KEY` and any provider API keys server-side; do not commit `.env.local`.
+7. For UI-only local work, start Vite with `npm run dev`. For staff invitations and account management, the `/api/staff` endpoint must run as a Vercel function: sign in to the Vercel CLI with `npx vercel login`, link this folder to your Vercel project with `npx vercel link`, then start the whole app with `npx vercel dev` (not `npm run dev`). This command loads the server-side variables from `.env.local`; never copy the service-role key into a `VITE_` variable. If Vercel asks for a port, use the prompted available port.
+8. Register the first account through the app's patient registration form and confirm its email if confirmation is enabled. In Supabase **Authentication → Users**, copy that user's UUID. In **SQL Editor**, promote only this trusted account:
+
+   ```sql
+   update public.profiles
+   set role = 'admin'
+   where id = 'AUTH_USER_UUID'
+     and role = 'patient';
+   ```
+
+   Confirm that exactly one row was updated, then sign out and sign back in so the app reloads the new role. Patient self-registration always receives the `patient` role.
+9. Use the Admin or Manager dashboard to invite staff. Configure the Vercel server-only variables below before testing invitations. Reception can invite a patient portal account from the walk-in workflow when the patient provides an email address.
+
+### Deploy and verify
+
+10. Push the project to GitHub and import that repository into Vercel. Vercel uses `npm run build` and `dist` as configured in [`vercel.json`](./vercel.json).
+11. In Vercel **Project → Settings → Environment Variables**, set these for Preview and Production, then redeploy:
+    - `VITE_SUPABASE_URL`
+    - `VITE_SUPABASE_ANON_KEY`
+    - `SUPABASE_URL`
+    - `SUPABASE_ANON_KEY`
+    - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never prefix with `VITE_`)
+12. Test registration, confirmation, login, logout, password change, staff invitations, and a booking using separate browser profiles for different roles. Verify that a patient cannot see another patient's records and that reception cannot read prescriptions. Also test two users booking the same doctor/time; only one should succeed.
+
+The cloud database starts empty. Existing local demo accounts and browser data are not uploaded automatically. The schema stores bookings, prescriptions, attendance, leave, revenue, and expenses as shared records. Row Level Security limits each role's access. The unique doctor/date/time index prevents duplicate online/follow-up bookings, and follow-up requests are linked to their source visit.
+
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are read by the server-side [`api/staff.ts`](./api/staff.ts) endpoint, which checks the caller's role before assigning a new account role. Never expose the service-role key to the browser or commit it to GitHub.
+
+This is an educational demo foundation, not a compliance certification or a substitute for clinical security review. Before handling real patient/financial information, review local healthcare/privacy requirements, backups, audit trails, retention, MFA, access review, and operational recovery. Never expose the Supabase service-role key in browser code.
+
+## Deploy to Vercel
+
+1. Push the project to a Git provider and import it in Vercel.
+2. Use the default Vite settings (`npm run build`, output directory `dist`); [`vercel.json`](./vercel.json) declares them.
+3. Set the Supabase environment variables above in Vercel. Do not add a Supabase `service_role` key to any `VITE_` variable or browser code.
+4. Deploy, verify `/api/health` and `/api/hospital`, then test sign-up, email confirmation, sign-in, sign-out, and password change.
+
+You must connect your own Supabase and Vercel accounts to perform the actual hosted deployment; this workspace cannot create those external projects or set their secrets.
+
 ## Project Structure
 
 ```
-├── api/                  # Serverless API routes (health check, hospital info)
+├── api/                  # Vercel serverless routes (health, hospital, staff provisioning)
+├── supabase/
+│   └── schema.sql        # Shared data tables, access policies, and integrity checks
 ├── src/
 │   ├── assets/images/    # Doctor avatars and hero images
 │   ├── components/

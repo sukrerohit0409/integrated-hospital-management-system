@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, RevenueItem } from '../../types';
 import { store } from '../../data/store';
-import { getLocalDateString } from '../../utils/date';
+import { manageStaffAccount } from '../../data/staffAccounts';
+import { supabase } from '../../lib/supabase';
 import { 
   Users, 
   CalendarClock, 
@@ -20,7 +21,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 
-export const ReceptionistDashboard: React.FC = () => {
+export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState<'queue' | 'fee_collection' | 'today_collection' | 'walk_in' | 'slot_checker'>('queue');
 
   const [appointments, setAppointments] = useState<Appointment[]>(() => store.getAppointments());
@@ -42,13 +43,13 @@ export const ReceptionistDashboard: React.FC = () => {
   const [walkinAge, setWalkinAge] = useState('32');
   const [walkinGender, setWalkinGender] = useState<'Male' | 'Female' | 'Other'>('Male');
   const [walkinReason, setWalkinReason] = useState('');
-  const [walkinDoctorId, setWalkinDoctorId] = useState('u-doc-1');
-  const [createProfileAllowed, setCreateProfileAllowed] = useState(true);
+  const [walkinDoctorId, setWalkinDoctorId] = useState('');
+  const [createProfileAllowed, setCreateProfileAllowed] = useState(!supabase);
   const [walkinSuccessMsg, setWalkinSuccessMsg] = useState('');
 
   // Slot Checker State
-  const [slotDoctorId, setSlotDoctorId] = useState('u-doc-1');
-  const [slotDate, setSlotDate] = useState(getLocalDateString());
+  const [slotDoctorId, setSlotDoctorId] = useState('');
+  const [slotDate, setSlotDate] = useState(() => new Date().toISOString().split('T')[0]);
 
   React.useEffect(() => {
     return store.subscribe ? store.subscribe(() => {
@@ -58,35 +59,31 @@ export const ReceptionistDashboard: React.FC = () => {
     }) : undefined;
   }, []);
 
-  const todayStr = getLocalDateString();
+  const todayStr = new Date().toISOString().split('T')[0];
   const doctors = users.filter((u) => u.role === 'doctor');
+
+  React.useEffect(() => {
+    if (doctors.length > 0) {
+      if (!doctors.some((doctor) => doctor.id === walkinDoctorId)) {
+        setWalkinDoctorId(doctors[0].id);
+      }
+      if (!doctors.some((doctor) => doctor.id === slotDoctorId)) {
+        setSlotDoctorId(doctors[0].id);
+      }
+    }
+  }, [doctors, walkinDoctorId, slotDoctorId]);
 
   // Today's appointments
   const todayAppointments = useMemo(() => {
     return appointments
       .filter((a) => a.date === todayStr)
       .sort((a, b) => a.tokenNumber.localeCompare(b.tokenNumber));
-  }, [appointments]);
-
-  const upcomingOnlineAppointments = useMemo(
-    () =>
-      appointments
-        .filter(
-          (appointment) =>
-            appointment.date > todayStr &&
-            appointment.type !== 'walk_in' &&
-            appointment.status === 'scheduled',
-        )
-        .sort((a, b) =>
-          `${a.date} ${a.timeSlot}`.localeCompare(`${b.date} ${b.timeSlot}`),
-        ),
-    [appointments, todayStr],
-  );
+  }, [appointments, todayStr]);
 
   // Today's revenue ONLY (specifically constrained for receptionist access)
   const todayRevenue = useMemo(() => {
     return revenue.filter((r) => r.date === todayStr);
-  }, [revenue]);
+  }, [revenue, todayStr]);
 
   const todayTotalCollected = todayRevenue.reduce((acc, cur) => acc + cur.amount, 0);
 
@@ -110,38 +107,72 @@ export const ReceptionistDashboard: React.FC = () => {
     setFeeAmount(String(apt.feeAmount || 650));
   };
 
-  const handleConfirmFeeCollection = (e: React.FormEvent) => {
+  const handleConfirmFeeCollection = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAptForFee) return;
 
     store.collectFee(
       selectedAptForFee.id,
       paymentMode,
-      'Ananya Patel (Reception Desk)'
+      currentUser.name
     );
 
-    setSelectedAptForFee(null);
+    try {
+      await store.flushPendingWrites();
+      setSelectedAptForFee(null);
+    } catch (error) {
+      console.error('Fee collection did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Fee collection could not be saved.',
+      }));
+    }
   };
 
   // Walk-in submission with IHMS profile creation
-  const handleWalkInSubmit = (e: React.FormEvent) => {
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!walkinName || !walkinPhone) return;
 
     let patientId = `walkin-${Date.now().toString(36)}`;
-    const effectiveEmail = walkinEmail.trim() || `${walkinPhone.trim()}@pulsecare.patient`;
+    const effectiveEmail = walkinEmail.trim();
 
-    // "ask them for adding profile on Integrated Hospital Management System if they allow make his account
-    // for now his user name is mobile no and email both and default password for Walkin patient is their email address"
     if (createProfileAllowed) {
       const existingUser = users.find(
         (u) =>
-          u.phone === walkinPhone.trim() ||
-          (walkinEmail && u.email.toLowerCase() === walkinEmail.toLowerCase())
+          u.role === 'patient' && (
+            u.phone === walkinPhone.trim() ||
+            (walkinEmail && u.email.toLowerCase() === walkinEmail.toLowerCase())
+          )
       );
 
       if (existingUser) {
         patientId = existingUser.id;
+      } else if (supabase) {
+        if (!effectiveEmail) {
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Enter the patient email address to send a secure portal invitation.',
+          }));
+          return;
+        }
+        try {
+          const invitedId = await manageStaffAccount({
+            action: 'invitePatient',
+            name: walkinName.trim(),
+            email: effectiveEmail,
+            phone: walkinPhone.trim(),
+            role: 'patient',
+            age: parseInt(walkinAge, 10) || 30,
+            gender: walkinGender,
+          });
+          if (!invitedId) throw new Error('Patient invitation did not return an account id.');
+          patientId = invitedId;
+        } catch (error) {
+          console.error('Could not invite walk-in patient:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: error instanceof Error ? error.message : 'Could not create the patient account.',
+          }));
+          return;
+        }
       } else {
         const newUser = store.addUser({
           name: walkinName.trim(),
@@ -152,19 +183,25 @@ export const ReceptionistDashboard: React.FC = () => {
           gender: walkinGender,
           department: 'Walk-in OPD',
           status: 'active',
-          password: effectiveEmail, // default password is email as instructed
+          password: effectiveEmail || walkinPhone.trim(),
         });
         patientId = newUser.id;
       }
     }
 
     const assignedDoc = doctors.find((d) => d.id === walkinDoctorId) || doctors[0];
+    if (!assignedDoc) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'No doctors are available. Add a doctor account before registering appointments.',
+      }));
+      return;
+    }
 
     const newApt = store.addAppointment({
       patientId,
       patientName: walkinName.trim(),
       patientPhone: walkinPhone.trim(),
-      patientEmail: effectiveEmail,
+      patientEmail: effectiveEmail || `${walkinPhone.trim()}@walkin.invalid`,
       patientAge: parseInt(walkinAge) || 30,
       patientGender: walkinGender,
       doctorId: assignedDoc.id,
@@ -179,10 +216,21 @@ export const ReceptionistDashboard: React.FC = () => {
       feeAmount: 650,
     });
 
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Walk-in registration did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Walk-in appointment could not be saved.',
+      }));
+      return;
+    }
     setWalkinSuccessMsg(
       `Walk-in patient registered successfully! Token Number: ${newApt.tokenNumber}. ${
         createProfileAllowed
-          ? `Patient account created. Login: ${walkinPhone} / ${effectiveEmail} (Password: ${effectiveEmail})`
+          ? supabase
+            ? 'A secure portal invitation was sent to the patient.'
+            : 'Demo patient account created.'
           : ''
       }`
     );
@@ -208,12 +256,18 @@ export const ReceptionistDashboard: React.FC = () => {
   ];
 
   // Book from slot checker
-  const handleQuickSlotBook = (slot: string) => {
+  const handleQuickSlotBook = async (slot: string) => {
     const patientName = prompt('Enter Patient Full Name for slot confirmation:');
     if (!patientName) return;
     const patientPhone = prompt('Enter Patient Phone Number:') || '9900112233';
 
     const selectedDoc = doctors.find((d) => d.id === slotDoctorId) || doctors[0];
+    if (!selectedDoc) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'No doctors are available for slot booking.',
+      }));
+      return;
+    }
 
     store.addAppointment({
       patientId: `pat-slot-${Date.now().toString(36)}`,
@@ -232,6 +286,15 @@ export const ReceptionistDashboard: React.FC = () => {
       feeAmount: 650,
     });
 
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Slot booking did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Slot booking could not be saved.',
+      }));
+      return;
+    }
     alert(`Slot ${slot} successfully confirmed for ${patientName} on ${slotDate}!`);
   };
 
@@ -349,47 +412,6 @@ export const ReceptionistDashboard: React.FC = () => {
               </p>
               <p className="text-[11px] text-emerald-700 mt-1">Rx generated and closed</p>
             </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="px-5 py-3 border-b border-slate-200">
-              <h2 className="text-sm font-bold text-slate-900">
-                Upcoming Online Appointments ({upcomingOnlineAppointments.length})
-              </h2>
-              <p className="text-xs text-slate-500">
-                Future bookings shared by patients and assigned to doctors
-              </p>
-            </div>
-            {upcomingOnlineAppointments.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
-                    <tr>
-                      <th className="py-2.5 px-4">Date & Time</th>
-                      <th className="py-2.5 px-4">Patient</th>
-                      <th className="py-2.5 px-4">Doctor</th>
-                      <th className="py-2.5 px-4">Token</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {upcomingOnlineAppointments.map((appointment) => (
-                      <tr key={appointment.id}>
-                        <td className="py-2.5 px-4">
-                          {appointment.date} · {appointment.timeSlot}
-                        </td>
-                        <td className="py-2.5 px-4">{appointment.patientName}</td>
-                        <td className="py-2.5 px-4">{appointment.doctorName}</td>
-                        <td className="py-2.5 px-4 font-mono">{appointment.tokenNumber}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="px-5 py-4 text-xs text-slate-500">
-                No upcoming online appointments.
-              </p>
-            )}
           </div>
 
           {/* Today's Queue Management Table */}
@@ -717,7 +739,7 @@ export const ReceptionistDashboard: React.FC = () => {
                 Walk-In Patient Registration & Account Provisioning
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Collect walk-in patient information, assign OPD token, and create their IHMS profile if permitted
+                Collect walk-in details and assign an OPD token; portal access is created only through a secure invitation
               </p>
             </div>
 
@@ -827,10 +849,10 @@ export const ReceptionistDashboard: React.FC = () => {
                   />
                   <div>
                     <span className="font-bold text-teal-950">
-                      Ask for adding profile on Integrated Hospital Management System?
+                      Send the patient a secure IHMS portal invitation?
                     </span>
                     <p className="text-[11px] text-teal-800 mt-0.5">
-                      If allowed: Creates a verified hospital account where <strong>Username is mobile number & email</strong> for follow-up notifications and records access.
+                      If accepted: send an account invitation to the patient's email. They set their own password before accessing records.
                     </p>
                   </div>
                 </label>
@@ -963,7 +985,7 @@ export const ReceptionistDashboard: React.FC = () => {
                   type="number"
                   required
                   value={feeAmount}
-                  onChange={(e) => setFeeAmount(e.target.value)}
+                  readOnly
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono font-bold text-sm"
                 />
               </div>

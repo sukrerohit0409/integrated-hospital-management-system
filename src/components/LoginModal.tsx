@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
 import { store } from '../data/store';
+import { getSignedInProfile } from '../data/auth';
+import { supabase } from '../lib/supabase';
 import { X, ShieldAlert, UserPlus, LogIn, CheckCircle2 } from 'lucide-react';
 
 interface LoginModalProps {
@@ -29,9 +31,40 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (import.meta.env.PROD && !supabase) {
+      setError('Authentication is not configured. Contact the site administrator.');
+      return;
+    }
+
+    if (supabase) {
+      const cleanId = identifier.trim();
+      if (!cleanId.includes('@')) {
+        setError('Sign in with the email address registered to your account.');
+        return;
+      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email: cleanId.toLowerCase(),
+        password,
+      });
+      if (error) {
+        setError('Sign in failed. Check your credentials and try again.');
+        return;
+      }
+      try {
+        const user = await getSignedInProfile();
+        if (!user) throw new Error('No profile is associated with this account.');
+        onLoginSuccess(user);
+        onClose();
+      } catch (profileError) {
+        await supabase.auth.signOut();
+        setError(profileError instanceof Error ? profileError.message : 'Could not load your account profile.');
+      }
+      return;
+    }
 
     const users = store.getUsers();
     const cleanId = identifier.trim().toLowerCase();
@@ -50,7 +83,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     // Password check
     const expectedPass = user.password || user.email;
-    if (password !== expectedPass && password !== user.email) {
+    if (password !== expectedPass) {
       setError(`Incorrect password. Please verify your credentials.`);
       return;
     }
@@ -60,12 +93,54 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     onClose();
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
+    if (import.meta.env.PROD && !supabase) {
+      setError('Authentication is not configured. Contact the site administrator.');
+      return;
+    }
+
     if (!regName || !regEmail || !regPhone) {
       setError('Please fill in Name, Email, and Phone Number.');
+      return;
+    }
+
+    if (supabase) {
+      if (regPassword.length < 8) {
+        setError('Password must be at least 8 characters long.');
+        return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email: regEmail.trim().toLowerCase(),
+        password: regPassword,
+        options: {
+          data: {
+            name: regName.trim(),
+            phone: regPhone.trim(),
+            age: parseInt(regAge, 10) || 30,
+            gender: regGender,
+          },
+        },
+      });
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      if (!data.session) {
+        setError('Account created. Confirm your email, then sign in.');
+        setIsRegister(false);
+        return;
+      }
+      try {
+        const user = await getSignedInProfile();
+        if (!user) throw new Error('Account created but its profile could not be loaded.');
+        onLoginSuccess(user);
+        onClose();
+      } catch (profileError) {
+        setError(profileError instanceof Error ? profileError.message : 'Could not load your new profile.');
+      }
       return;
     }
 
@@ -229,7 +304,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="Enter Email Address or Mobile Number"
+                  placeholder="e.g. rohit@gmail.com or 1122334455"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"

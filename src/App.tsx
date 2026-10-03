@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, UserRole } from './types';
 import { store } from './data/store';
+import { clearSharedStore, initializeSharedStore } from './data/store';
+import { getSignedInProfile } from './data/auth';
+import { supabase } from './lib/supabase';
 import { Navbar } from './components/Navbar';
 import { LoginModal } from './components/LoginModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
@@ -13,28 +16,129 @@ import { PatientDashboard } from './components/patient/PatientDashboard';
 import { Building2, Phone, ShieldCheck, HeartHandshake, Stethoscope, Clock } from 'lucide-react';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => store.getCurrentUser());
-  const [syncError, setSyncError] = useState<string | null>(() => store.getSyncError());
+  const [currentUser, setCurrentUser] = useState<User | null>(
+    () => import.meta.env.DEV && !supabase ? store.getCurrentUser() : null
+  );
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [isLoadingSharedData, setIsLoadingSharedData] = useState(Boolean(supabase));
+  const [dataError, setDataError] = useState('');
+  const stopSharedSync = useRef<(() => void) | null>(null);
+  const sessionLoadId = useRef(0);
 
   // Sync state if store changes externally
   useEffect(() => {
+    if (supabase) {
+      let active = true;
+      const restoreSession = async () => {
+        const loadId = ++sessionLoadId.current;
+        setIsLoadingSharedData(true);
+        setDataError('');
+        try {
+          const user = await getSignedInProfile();
+          if (!active || loadId !== sessionLoadId.current) return;
+          if (!user) {
+            stopSharedSync.current?.();
+            stopSharedSync.current = null;
+            clearSharedStore();
+            if (active) setCurrentUser(null);
+            return;
+          }
+          store.setCurrentUser(user);
+          const stopSync = await initializeSharedStore();
+          if (!active || loadId !== sessionLoadId.current) {
+            stopSync();
+            return;
+          }
+          stopSharedSync.current?.();
+          stopSharedSync.current = stopSync;
+          if (active) setCurrentUser(user);
+        } catch (error) {
+          if (loadId !== sessionLoadId.current) return;
+          console.error('Unable to initialize shared hospital data:', error);
+          if (active) {
+            setCurrentUser(null);
+            setDataError(error instanceof Error ? error.message : 'Could not load shared hospital data.');
+          }
+        } finally {
+          if (active) setIsLoadingSharedData(false);
+        }
+      };
+      void restoreSession();
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        window.setTimeout(() => {
+          if (!session) {
+            sessionLoadId.current += 1;
+            stopSharedSync.current?.();
+            stopSharedSync.current = null;
+            clearSharedStore();
+            if (active) {
+              setCurrentUser(null);
+              setIsLoadingSharedData(false);
+            }
+          } else {
+            void restoreSession();
+          }
+        }, 0);
+      });
+      const onDataError = (event: Event) => {
+        const detail = (event as CustomEvent<string>).detail;
+        setDataError(detail);
+      };
+      window.addEventListener('ihms:data-error', onDataError);
+      return () => {
+        active = false;
+        sessionLoadId.current += 1;
+        subscription.unsubscribe();
+        window.removeEventListener('ihms:data-error', onDataError);
+        stopSharedSync.current?.();
+      };
+    }
+    if (import.meta.env.PROD) return;
     return store.subscribe ? store.subscribe(() => {
       setCurrentUser(store.getCurrentUser());
-      setSyncError(store.getSyncError());
     }) : undefined;
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (supabase) {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Unable to sign out:', error);
+        return;
+      }
+    }
     store.setCurrentUser(null);
     setCurrentUser(null);
     setIsLoginModalOpen(true);
   };
 
-  const handleLoginSuccess = (user: User) => {
+  const handleLoginSuccess = async (user: User) => {
     store.setCurrentUser(user);
-    setCurrentUser(user);
+    if (supabase) {
+      const loadId = ++sessionLoadId.current;
+      setIsLoadingSharedData(true);
+      setDataError('');
+      try {
+        const stopSync = await initializeSharedStore();
+        if (loadId !== sessionLoadId.current) {
+          stopSync();
+          return;
+        }
+        stopSharedSync.current?.();
+        stopSharedSync.current = stopSync;
+        setCurrentUser(user);
+      } catch (error) {
+        if (loadId !== sessionLoadId.current) return;
+        console.error('Unable to load shared hospital data after sign-in:', error);
+        setDataError(error instanceof Error ? error.message : 'Could not load shared hospital data.');
+        await supabase.auth.signOut();
+      } finally {
+        if (loadId === sessionLoadId.current) setIsLoadingSharedData(false);
+      }
+    } else {
+      setCurrentUser(user);
+    }
   };
 
   return (
@@ -47,20 +151,23 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {syncError && (
-        <div role="alert" className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900">
-          Shared demo data sync issue: {syncError}
-        </div>
-      )}
-
       {/* Main Hospital Workspace */}
       <main className="grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {currentUser ? (
+        {dataError && (
+          <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            {dataError}
+          </div>
+        )}
+        {isLoadingSharedData ? (
+          <div className="py-16 text-center text-sm text-slate-600" role="status">
+            Loading your secure hospital workspace…
+          </div>
+        ) : currentUser ? (
           <>
-            {currentUser.role === 'admin' && <AdminDashboard />}
-            {currentUser.role === 'manager' && <ManagerDashboard />}
+            {currentUser.role === 'admin' && <AdminDashboard currentUser={currentUser} />}
+            {currentUser.role === 'manager' && <ManagerDashboard currentUser={currentUser} />}
             {currentUser.role === 'doctor' && <DoctorDashboard currentUser={currentUser} />}
-            {currentUser.role === 'receptionist' && <ReceptionistDashboard />}
+            {currentUser.role === 'receptionist' && <ReceptionistDashboard currentUser={currentUser} />}
             {(currentUser.role === 'nurse' ||
               currentUser.role === 'cleaner' ||
               currentUser.role === 'ward_boy' ||
@@ -112,7 +219,7 @@ export default function App() {
             <span>·</span>
             <span className="flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-              NABH & ISO 9001 Certified Clinical Center
+              Educational demo · Not certified for clinical use
             </span>
           </div>
         </div>

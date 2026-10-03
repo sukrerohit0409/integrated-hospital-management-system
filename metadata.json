@@ -1,6 +1,5 @@
 {
   "name": "Integrated Hospital Management System",
   "description": "Comprehensive hospital operations platform automating slot booking, patient consultations, digital prescriptions, billing, staff attendance, working hour tracking, and manager & admin controls.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "requestFramePermissions": []
 }
