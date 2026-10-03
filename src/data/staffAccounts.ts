@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { getAuthErrorMessage } from './authErrors';
 
 export type StaffAccountInput = {
   action: 'invite' | 'invitePatient';
@@ -41,6 +42,8 @@ export async function manageStaffAccount(
     }
     throw new Error('The staff API returned an invalid response.');
   }
-  if (!response.ok) throw new Error(result.error || `Staff account request failed (HTTP ${response.status}).`);
+  if (!response.ok) {
+    throw new Error(getAuthErrorMessage(result.error || `Staff account request failed (HTTP ${response.status}).`));
+  }
   return result.id;
 }

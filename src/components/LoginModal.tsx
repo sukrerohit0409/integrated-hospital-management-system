@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { User, UserRole } from '../types';
 import { store } from '../data/store';
 import { getSignedInProfile } from '../data/auth';
+import { getAuthErrorMessage } from '../data/authErrors';
 import { supabase } from '../lib/supabase';
 import { X, ShieldAlert, UserPlus, LogIn, CheckCircle2 } from 'lucide-react';
 
@@ -125,7 +126,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         },
       });
       if (error) {
-        setError(error.message);
+        setError(getAuthErrorMessage(error.message));
         return;
       }
       if (!data.session) {
