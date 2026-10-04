@@ -66,6 +66,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
   const [newStaffDept, setNewStaffDept] = useState('Nursing & Emergency');
   const [newStaffAge, setNewStaffAge] = useState('28');
   const [newStaffGender, setNewStaffGender] = useState<'Male' | 'Female' | 'Other'>('Female');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
 
   // New Expense Form
   const [expCategory, setExpCategory] = useState<ExpenseItem['category']>('Medicines & Supplies');
@@ -196,6 +197,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaffName || !newStaffEmail || !newStaffPhone) return;
+    const staffPassword = newStaffPassword.trim() || 'Hospital@123';
 
     try {
       if (supabase) {
@@ -209,6 +211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           department: newStaffDept,
           age: parseInt(newStaffAge, 10) || 30,
           gender: newStaffGender,
+          password: staffPassword,
         });
       } else {
         store.addUser({
@@ -221,7 +224,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           age: parseInt(newStaffAge, 10) || 30,
           gender: newStaffGender,
           status: 'active',
-          password: newStaffEmail,
+          password: staffPassword,
         });
       }
     } catch (error) {
@@ -236,6 +239,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     setNewStaffName('');
     setNewStaffEmail('');
     setNewStaffPhone('');
+    setNewStaffPassword('');
     setCustomRoleTitle('');
   };
 
@@ -1337,6 +1341,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                     <option value="Other">Other</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Login Password (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Set initial password (default: Hospital@123)"
+                  value={newStaffPassword}
+                  onChange={(e) => setNewStaffPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Auto-confirmed in Authentication. Staff can immediately sign in with this password.
+                </p>
               </div>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">

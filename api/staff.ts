@@ -88,26 +88,42 @@ export default async function handler(req: Request, res: Response) {
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };
-    const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
-      data: { name, phone, age: details.age, gender: details.gender },
+    const rawPassword = typeof body.password === 'string' && body.password.trim() ? body.password.trim() : '';
+    const cleanPhone = phone.replace(/\D/g, '') || phone;
+    let initialPassword = rawPassword || (isPatientInvite ? (cleanPhone.length >= 6 ? cleanPhone : 'Patient@123') : 'Hospital@123');
+    if (initialPassword.length < 6) {
+      initialPassword = isPatientInvite ? 'Patient@123' : 'Hospital@123';
+    }
+
+    const { data, error } = await adminClient.auth.admin.createUser({
+      email,
+      password: initialPassword,
+      email_confirm: true,
+      user_metadata: { name, phone, age: details.age, gender: details.gender },
     });
     if (error || !data.user) {
-      return res.status(400).json({ error: error?.message || 'Could not create the staff account.' });
+      return res.status(400).json({ error: error?.message || 'Could not create the account in Supabase Auth.' });
     }
 
     const { error: profileError } = await adminClient
       .from('profiles')
-      .update({ name, phone, role, details })
-      .eq('id', data.user.id);
+      .upsert({
+        id: data.user.id,
+        name,
+        email: email.toLowerCase(),
+        phone,
+        role,
+        details,
+      }, { onConflict: 'id' });
     if (profileError) {
       const { error: cleanupError } = await adminClient.auth.admin.deleteUser(data.user.id);
-      if (cleanupError) console.error('Could not clean up unassigned invited user:', cleanupError);
-      return res.status(500).json({ error: 'Invitation was not completed because the staff profile could not be assigned.' });
+      if (cleanupError) console.error('Could not clean up unassigned user:', cleanupError);
+      return res.status(500).json({ error: 'Account was not completed because the profile could not be assigned.' });
     }
     return res.status(201).json({
       id: data.user.id,
       email,
-      message: isPatientInvite ? 'Patient invitation email sent.' : 'Staff invitation email sent.',
+      message: isPatientInvite ? 'Patient account created and confirmed.' : 'Staff account created and confirmed.',
     });
   }
 
@@ -152,6 +168,7 @@ export default async function handler(req: Request, res: Response) {
     if (actor.role === 'manager' && ['admin', 'manager'].includes(target.role)) {
       return res.status(403).json({ error: 'Managers cannot remove admin or manager accounts.' });
     }
+    await adminClient.from('profiles').delete().eq('id', id);
     const { error } = await adminClient.auth.admin.deleteUser(id);
     if (error) return res.status(500).json({ error: 'Could not remove the staff account.' });
     return res.status(200).json({ message: 'Staff account removed.' });

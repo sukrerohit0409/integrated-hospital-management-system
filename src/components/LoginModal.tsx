@@ -43,16 +43,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     if (supabase) {
       const cleanId = identifier.trim();
+      let emailToUse = cleanId.toLowerCase();
       if (!cleanId.includes('@')) {
-        setError('Sign in with the email address registered to your account.');
-        return;
+        const cleanPhone = cleanId.replace(/\D/g, '');
+        if (cleanPhone) {
+          emailToUse = `patient_${cleanPhone}@hospital.local`;
+        } else {
+          setError('Sign in with your registered email address or mobile number.');
+          return;
+        }
       }
       const { error } = await supabase.auth.signInWithPassword({
-        email: cleanId.toLowerCase(),
+        email: emailToUse,
         password,
       });
       if (error) {
-        setError('Sign in failed. Check your credentials and try again.');
+        if (!cleanId.includes('@')) {
+          setError('Sign in failed. Check your mobile number and password, or use your email address.');
+        } else {
+          setError('Sign in failed. Check your credentials and try again.');
+        }
         return;
       }
       try {
@@ -130,9 +140,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         return;
       }
       if (!data.session) {
-        setError('Account created. Confirm your email, then sign in.');
-        setIsRegister(false);
-        return;
+        // In case Supabase auto-confirmed or allows immediate sign in
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: regEmail.trim().toLowerCase(),
+          password: regPassword,
+        });
+        if (signInError) {
+          setError('Account created! Sign in using your registered credentials.');
+          setIsRegister(false);
+          return;
+        }
       }
       try {
         const user = await getSignedInProfile();

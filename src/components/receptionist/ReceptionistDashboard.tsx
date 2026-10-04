@@ -177,42 +177,42 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       if (existingUser) {
         patientId = existingUser.id;
       } else if (supabase) {
-        if (!effectiveEmail) {
-          window.dispatchEvent(new CustomEvent('ihms:data-error', {
-            detail: 'Enter the patient email address to send a secure portal invitation.',
-          }));
-          return;
-        }
+        const cleanPhone = walkinPhone.replace(/\D/g, '') || walkinPhone.trim();
+        const patientEmail = effectiveEmail || `patient_${cleanPhone}@hospital.local`;
+        const patientPassword = cleanPhone.length >= 6 ? cleanPhone : 'Patient@123';
         try {
           const invitedId = await manageStaffAccount({
             action: 'invitePatient',
             name: walkinName.trim(),
-            email: effectiveEmail,
+            email: patientEmail,
             phone: walkinPhone.trim(),
             role: 'patient',
             age: parseInt(walkinAge, 10) || 30,
             gender: walkinGender,
+            password: patientPassword,
           });
-          if (!invitedId) throw new Error('Patient invitation did not return an account id.');
+          if (!invitedId) throw new Error('Patient account creation did not return an account id.');
           patientId = invitedId;
         } catch (error) {
-          console.error('Could not invite walk-in patient:', error);
+          console.error('Could not create walk-in patient account:', error);
           window.dispatchEvent(new CustomEvent('ihms:data-error', {
             detail: error instanceof Error ? error.message : 'Could not create the patient account.',
           }));
           return;
         }
       } else {
+        const cleanPhone = walkinPhone.replace(/\D/g, '') || walkinPhone.trim();
+        const patientEmail = effectiveEmail || `patient_${cleanPhone}@hospital.local`;
         const newUser = store.addUser({
           name: walkinName.trim(),
-          email: effectiveEmail,
+          email: patientEmail,
           phone: walkinPhone.trim(),
           role: 'patient',
           age: parseInt(walkinAge) || 30,
           gender: walkinGender,
           department: 'Walk-in OPD',
           status: 'active',
-          password: effectiveEmail || walkinPhone.trim(),
+          password: cleanPhone.length >= 6 ? cleanPhone : 'Patient@123',
         });
         patientId = newUser.id;
       }
