@@ -102,7 +102,7 @@ export default function App() {
 
   const handleLogout = async () => {
     if (supabase) {
-      const { error } = await supabase.auth.signOut();
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
       if (error) {
         console.error('Unable to sign out:', error);
         return;
@@ -132,7 +132,7 @@ export default function App() {
         if (loadId !== sessionLoadId.current) return;
         console.error('Unable to load shared hospital data after sign-in:', error);
         setDataError(error instanceof Error ? error.message : 'Could not load shared hospital data.');
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
       } finally {
         if (loadId === sessionLoadId.current) setIsLoadingSharedData(false);
       }

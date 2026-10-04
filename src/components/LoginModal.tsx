@@ -61,7 +61,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         onLoginSuccess(user);
         onClose();
       } catch (profileError) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
         setError(profileError instanceof Error ? profileError.message : 'Could not load your account profile.');
       }
       return;
