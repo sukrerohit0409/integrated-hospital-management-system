@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, RevenueItem } from '../../types';
 import { store } from '../../data/store';
+import { getHospitalDate, getHospitalTime } from '../../utils/hospitalDate';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { 
@@ -50,7 +51,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
   // Slot Checker State
   const [slotDoctorId, setSlotDoctorId] = useState('');
-  const [slotDate, setSlotDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [slotDate, setSlotDate] = useState(() => getHospitalDate());
 
   React.useEffect(() => {
     return store.subscribe ? store.subscribe(() => {
@@ -60,8 +61,8 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
     }) : undefined;
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const doctors = users.filter((u) => u.role === 'doctor');
+  const todayStr = getHospitalDate();
+  const doctors = users.filter((u) => u.role === 'doctor' && u.status === 'active');
 
   React.useEffect(() => {
     if (doctors.length > 0) {
@@ -236,7 +237,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       doctorName: assignedDoc.name,
       department: assignedDoc.department || 'Outpatient Clinic',
       date: todayStr,
-      timeSlot: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timeSlot: getHospitalTime(),
       type: 'walk_in',
       status: 'waiting', // immediately placed in waiting queue
       reasonForVisit: walkinReason || 'Walk-in immediate medical consultation',
@@ -646,7 +647,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
       {/* TODAY'S COLLECTION ONLY (Constrained Receptionist View as requested) */}
       {activeTab === 'today_collection' && (
-        <div className="space-y-6">
+        <div className="space-y-6 print-counter-report">
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div>
@@ -660,7 +661,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
               <button
                 onClick={() => window.print()}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                className="no-print px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
               >
                 <Printer className="w-3.5 h-3.5" />
                 <span>Print Daily Counter Report</span>

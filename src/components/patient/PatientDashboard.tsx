@@ -19,6 +19,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
+import { getHospitalDate } from '../../utils/hospitalDate';
 
 interface PatientDashboardProps {
   currentUser: User | null;
@@ -40,7 +41,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
   // Booking Flow State
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('All');
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
-  const [bookingDate, setBookingDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [bookingDate, setBookingDate] = useState<string>(() => getHospitalDate());
   const [bookingSlot, setBookingSlot] = useState<string>('10:00 AM');
   const [bookingReason, setBookingReason] = useState<string>('');
   const [bookingSuccessToken, setBookingSuccessToken] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
   }, []);
 
   const patientId = currentUser?.id || 'u-pat-1';
-  const doctors = users.filter((u) => u.role === 'doctor');
+  const doctors = users.filter((u) => u.role === 'doctor' && u.status === 'active');
 
   React.useEffect(() => {
     if (!doctors.some((doctor) => doctor.id === selectedDoctorId) && doctors.length > 0) {
@@ -654,7 +655,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                     required
                     value={bookingDate}
                     onChange={(e) => setBookingDate(e.target.value)}
-                    min={new Date().toISOString().split('T')[0]}
+                    min={getHospitalDate()}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 bg-white"
                   />
                 </div>

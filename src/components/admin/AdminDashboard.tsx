@@ -4,6 +4,7 @@ import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { getUserDisplayName, getUserInitials } from '../../utils/userDisplay';
+import { addCalendarDays, getHospitalDate, getHospitalTime } from '../../utils/hospitalDate';
 import { 
   IndianRupee, 
   TrendingUp, 
@@ -83,8 +84,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     }) : undefined;
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const weekStartStr = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const todayStr = getHospitalDate();
+  const weekStartStr = addCalendarDays(todayStr, -6);
 
   // Revenue filtering logic
   const filteredRevenue = useMemo(() => {
@@ -268,7 +269,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
 
     store.addExpense({
       date: todayStr,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      time: getHospitalTime(),
       amount: amt,
       category: expCategory,
       description: expDescription,

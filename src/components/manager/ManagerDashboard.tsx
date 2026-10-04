@@ -3,6 +3,7 @@ import { User, AttendanceRecord, LeaveRequest, UserRole } from '../../types';
 import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
+import { getHospitalDate } from '../../utils/hospitalDate';
 import { 
   Eye, 
   Users, 
@@ -49,7 +50,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
     }) : undefined;
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getHospitalDate();
   const staffMembers = users.filter((u) => u.role !== 'patient');
 
   // Staff working hours & working days calculation

@@ -16,6 +16,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
+import { addCalendarDays, getHospitalDate } from '../../utils/hospitalDate';
 
 interface DoctorDashboardProps {
   currentUser: User | null;
@@ -58,7 +59,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     }) : undefined;
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getHospitalDate();
   const doctorId = currentUser?.id || 'u-doc-1';
 
   // Filter doctor's appointments
@@ -117,7 +118,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
         'Avoid strenuous lifting and late-night exhaustion',
       ]
     );
-    const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const nextWeek = addCalendarDays(todayStr, 7);
     setFollowUpDate(apt.prescription?.followUpDate || nextWeek);
     setDoctorNotes(apt.prescription?.doctorNotes || 'Maintain adequate hydration and monitor symptoms.');
     setMedicalCharges(apt.medicalCharges || []);

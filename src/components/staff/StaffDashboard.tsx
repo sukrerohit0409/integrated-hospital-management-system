@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, AttendanceRecord, LeaveRequest } from '../../types';
 import { store } from '../../data/store';
+import { getHospitalDate } from '../../utils/hospitalDate';
 import { 
   Clock, 
   Calendar, 
@@ -36,7 +37,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
     }) : undefined;
   }, []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getHospitalDate();
   const staffId = currentUser?.id || 'u-nurse-1';
 
   // "staff has access for attendance of only that user and working hour ,day tracking"

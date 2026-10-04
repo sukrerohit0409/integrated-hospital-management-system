@@ -20,6 +20,7 @@ import {
 } from './mockData';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { getHospitalDate, getHospitalTime } from '../utils/hospitalDate';
 import { getUserDisplayName } from '../utils/userDisplay';
 
 const STORAGE_KEYS = {
@@ -414,7 +415,7 @@ export const store = {
     const newUser: User = {
       ...userData,
       id: createRecordId('u'),
-      createdAt: new Date().toISOString().split('T')[0],
+      createdAt: getHospitalDate(),
       isOnline: false,
       status: userData.status || 'active',
       password: userData.password || userData.email, // default password is email as requested
@@ -492,8 +493,8 @@ export const store = {
   ) => {
     const appointments = store.getAppointments();
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
-    const dateStr = new Date().toISOString().split('T')[0];
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = getHospitalDate();
+    const timeStr = getHospitalTime();
 
     const targetApt = appointments.find((a) => a.id === id);
     if (!targetApt) return;
@@ -577,8 +578,8 @@ export const store = {
 
   clockIn: (staffId: string, staffName: string, role: UserRole, customRoleTitle?: string, notes?: string): AttendanceRecord => {
     const records = store.getAttendance();
-    const today = new Date().toISOString().split('T')[0];
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const today = getHospitalDate();
+    const timeNow = getHospitalTime();
 
     // Check if already clocked in today
     const existing = records.find((r) => r.staffId === staffId && r.date === today);
@@ -606,8 +607,8 @@ export const store = {
 
   clockOut: (staffId: string, notes?: string): AttendanceRecord | null => {
     const records = store.getAttendance();
-    const today = new Date().toISOString().split('T')[0];
-    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const today = getHospitalDate();
+    const timeNow = getHospitalTime();
     const clockOutAt = new Date();
 
     let updatedRecord: AttendanceRecord | null = null;
@@ -698,7 +699,7 @@ export const store = {
     const appointments = store.getAppointments();
     const revenue = store.getRevenue();
     const expenses = store.getExpenses();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getHospitalDate();
 
     const patients = users.filter((u) => u.role === 'patient');
     const staff = users.filter((u) => u.role !== 'patient');

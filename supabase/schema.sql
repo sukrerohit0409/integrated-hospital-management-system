@@ -267,7 +267,12 @@ begin
     coalesce(appointment_payload -> 'patientEmail', 'null'::jsonb),
     true
   );
-  new.payload := jsonb_set(new.payload, '{date}', to_jsonb(current_date::text), true);
+  new.payload := jsonb_set(
+    new.payload,
+    '{date}',
+    to_jsonb(((now() at time zone 'Asia/Kolkata')::date)::text),
+    true
+  );
   new.updated_at := now();
   return new;
 end;
@@ -320,7 +325,7 @@ as $$
   select r.payload ->> 'timeSlot'
   from public.ihms_records r
   where public.current_ihms_role() = 'patient'
-    and p_date >= current_date
+    and p_date >= (now() at time zone 'Asia/Kolkata')::date
     and r.record_type = 'appointments'
     and r.payload ->> 'type' in ('online_booking', 'follow_up')
     and r.doctor_id = p_doctor_id
@@ -409,6 +414,8 @@ declare
   old_charge_total numeric := 0;
   new_charge_total numeric := 0;
   base_fee numeric := 0;
+  clock_in_time timestamptz;
+  clock_out_time timestamptz;
 begin
   if actor_role in ('admin', 'manager') then
     new.updated_at := now();
@@ -538,9 +545,28 @@ begin
       or old.owner_id <> (select auth.uid())::text
       or (new.payload - 'clockOut' - 'clockOutAt' - 'hoursWorked' - 'notes')
         <> (old.payload - 'clockOut' - 'clockOutAt' - 'hoursWorked' - 'notes')
+      or old.payload ->> 'clockOutAt' is not null
     then
       raise exception 'Staff may only update their own clock-out details';
     end if;
+    clock_in_time := nullif(old.payload ->> 'clockInAt', '')::timestamptz;
+    if clock_in_time is null or clock_in_time > now() then
+      raise exception 'The shift has no valid clock-in timestamp';
+    end if;
+    clock_out_time := now();
+    new.payload := jsonb_set(
+      new.payload,
+      '{clockOut}',
+      to_jsonb(to_char(clock_out_time at time zone 'Asia/Kolkata', 'HH12:MI AM')),
+      true
+    );
+    new.payload := jsonb_set(new.payload, '{clockOutAt}', to_jsonb(clock_out_time), true);
+    new.payload := jsonb_set(
+      new.payload,
+      '{hoursWorked}',
+      to_jsonb(round(greatest(extract(epoch from (clock_out_time - clock_in_time)), 0)::numeric / 3600, 2)),
+      true
+    );
   elsif old.record_type = 'leaves' then
     raise exception 'Only hospital managers may review leave requests';
   else
@@ -607,7 +633,7 @@ begin
       if coalesce(new.payload ->> 'date', '') !~ '^\d{4}-\d{2}-\d{2}$' then
         raise exception 'Appointment date is invalid';
       end if;
-      if (new.payload ->> 'date')::date < current_date
+      if (new.payload ->> 'date')::date < (now() at time zone 'Asia/Kolkata')::date
         or new.payload ->> 'timeSlot' is null
         or new.payload ->> 'timeSlot' not in (
           '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
@@ -687,7 +713,38 @@ begin
     end if;
     new.payload := jsonb_set(new.payload, '{staffName}', to_jsonb(actor_profile.name), true);
     new.payload := jsonb_set(new.payload, '{role}', to_jsonb(actor_profile.role::text), true);
-    if new.record_type = 'leaves' then
+    if new.record_type = 'attendance' then
+      perform pg_advisory_xact_lock(hashtextextended(
+        'attendance:' || new.owner_id || ':' || (now() at time zone 'Asia/Kolkata')::date::text,
+        0
+      ));
+      if exists (
+        select 1
+        from public.ihms_records existing
+        where existing.record_type = 'attendance'
+          and existing.owner_id = new.owner_id
+          and existing.payload ->> 'date' =
+            ((now() at time zone 'Asia/Kolkata')::date)::text
+      ) then
+        raise exception 'Attendance has already been recorded for today';
+      end if;
+      new.payload := jsonb_set(
+        new.payload,
+        '{date}',
+        to_jsonb(((now() at time zone 'Asia/Kolkata')::date)::text),
+        true
+      );
+      new.payload := jsonb_set(
+        new.payload,
+        '{clockIn}',
+        to_jsonb(to_char(now() at time zone 'Asia/Kolkata', 'HH12:MI AM')),
+        true
+      );
+      new.payload := jsonb_set(new.payload, '{clockInAt}', to_jsonb(now()), true);
+      new.payload := jsonb_set(new.payload, '{hoursWorked}', '0'::jsonb, true);
+      new.payload := jsonb_set(new.payload, '{status}', '"present"'::jsonb, true);
+      new.payload := new.payload - 'clockOut' - 'clockOutAt';
+    else
       new.payload := jsonb_set(new.payload, '{status}', '"pending"'::jsonb, true);
       new.payload := jsonb_set(new.payload, '{appliedAt}', to_jsonb(now()::text), true);
     end if;
@@ -714,8 +771,18 @@ begin
       true
     );
     new.payload := jsonb_set(new.payload, '{collectedBy}', to_jsonb(actor_profile.name), true);
-    new.payload := jsonb_set(new.payload, '{date}', to_jsonb(current_date::text), true);
-    new.payload := jsonb_set(new.payload, '{time}', to_jsonb(to_char(now(), 'HH12:MI AM')), true);
+    new.payload := jsonb_set(
+      new.payload,
+      '{date}',
+      to_jsonb(((now() at time zone 'Asia/Kolkata')::date)::text),
+      true
+    );
+    new.payload := jsonb_set(
+      new.payload,
+      '{time}',
+      to_jsonb(to_char(now() at time zone 'Asia/Kolkata', 'HH12:MI AM')),
+      true
+    );
   elsif new.record_type = 'expenses' then
     if coalesce((new.payload ->> 'amount')::numeric, 0) <= 0 then
       raise exception 'Expense amount must be greater than zero';
