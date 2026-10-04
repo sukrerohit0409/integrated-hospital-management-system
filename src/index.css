@@ -45,6 +45,7 @@
   .print-prescription-root {
     position: static !important;
     display: block !important;
+    visibility: visible !important;
     overflow: visible !important;
     padding: 0 !important;
     background: white !important;
@@ -52,6 +53,7 @@
   .print-prescription-card {
     position: static !important;
     display: block !important;
+    visibility: visible !important;
     width: 100% !important;
     max-width: none !important;
     max-height: none !important;

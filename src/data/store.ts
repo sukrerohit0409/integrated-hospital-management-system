@@ -132,9 +132,10 @@ async function persistSharedRecords(
   value: unknown,
   actorId: string | undefined
 ): Promise<void> {
-    if (!supabase || !Array.isArray(value)) return;
+    const client = supabase;
+    if (!client || !Array.isArray(value)) return;
     try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await client.auth.getUser();
       if (authError) throw authError;
       if (!actorId || user?.id !== actorId) {
         throw new Error('The signed-in account changed before this update could be saved.');
@@ -159,7 +160,7 @@ async function persistSharedRecords(
             payload: record.prescription,
           }));
         if (prescriptions.length) {
-          const { error } = await supabase.from('ihms_prescriptions').upsert(prescriptions, {
+          const { error } = await client.from('ihms_prescriptions').upsert(prescriptions, {
             onConflict: 'appointment_id',
           });
           if (error) throw error;
@@ -168,7 +169,7 @@ async function persistSharedRecords(
           .filter((record) => !record.prescription && previousById.get(String(record.id))?.prescription)
           .map((record) => String(record.id));
         if (removedPrescriptions.length) {
-          const { error } = await supabase
+          const { error } = await client
             .from('ihms_prescriptions')
             .delete()
             .in('appointment_id', removedPrescriptions);
@@ -176,7 +177,7 @@ async function persistSharedRecords(
         }
       }
       if (changed.length) {
-        const rows = changed.map((record) => ({
+        const toDatabaseRow = (record: Record<string, unknown>) => ({
           record_type: dataset,
           record_id: String(record.id),
           owner_id: recordOwner(dataset, record),
@@ -184,11 +185,30 @@ async function persistSharedRecords(
           payload: dataset === 'appointments'
             ? Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'prescription'))
             : record,
-        }));
-        const { error } = await supabase.from('ihms_records').upsert(rows, {
-          onConflict: 'record_type,record_id',
         });
-        if (error) throw error;
+        const inserted = changed.filter((record) => !previousById.has(String(record.id)));
+        const updated = changed.filter((record) => previousById.has(String(record.id)));
+        if (inserted.length) {
+          const { error } = await client
+            .from('ihms_records')
+            .insert(inserted.map(toDatabaseRow));
+          if (error) throw error;
+        }
+        if (updated.length) {
+          await Promise.all(updated.map(async (record) => {
+            const { data, error } = await client
+              .from('ihms_records')
+              .update({ payload: toDatabaseRow(record).payload })
+              .eq('record_type', dataset)
+              .eq('record_id', String(record.id))
+              .select('record_id')
+              .maybeSingle();
+            if (error) throw error;
+            if (!data) {
+              throw new Error(`The ${dataset} record ${String(record.id)} no longer exists or cannot be updated.`);
+            }
+          }));
+        }
 }
 
       const nextIds = new Set(next.map((record) => String(record.id)));
@@ -196,7 +216,7 @@ async function persistSharedRecords(
         .map((record) => String(record.id))
         .filter((id) => !nextIds.has(id));
       if (removedIds.length) {
-        const { error } = await supabase
+        const { error } = await client
           .from('ihms_records')
           .delete()
           .eq('record_type', dataset)
