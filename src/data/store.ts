@@ -8,6 +8,7 @@ import {
   ExpenseItem,
   LeaveRequest,
   HospitalStats,
+  MedicalCharge,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -203,7 +204,8 @@ async function persistSharedRecords(
         if (error) throw error;
       }
     } catch (error) {
-      const message = `Unable to save ${dataset.replace('_', ' ')}. Your change may not be shared with other users.`;
+      const detail = error instanceof Error ? error.message : String(error);
+      const message = `Unable to save ${dataset.replace('_', ' ')}: ${detail}`;
       console.error(`Unable to save ${dataset} to Supabase:`, error);
       sharedWriteErrors.push(message);
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
@@ -479,6 +481,7 @@ export const store = {
     const collectedApt: Appointment = {
       ...targetApt,
       feeCollected: true,
+      billingApproved: true,
       paymentMethod,
       paidAt: nowStr,
     };
@@ -504,9 +507,18 @@ export const store = {
 
   savePrescription: (
     appointmentId: string,
-    prescriptionData: Omit<Prescription, 'id' | 'appointmentId'>
+    prescriptionData: Omit<Prescription, 'id' | 'appointmentId'>,
+    medicalCharges: MedicalCharge[] = []
   ): Prescription => {
     const appointments = store.getAppointments();
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    const previousChargeTotal = appointment?.medicalCharges?.reduce((sum, charge) => sum + charge.amount, 0) || 0;
+    const baseFee = Math.max(0, (appointment?.feeAmount || 650) - previousChargeTotal);
+    const normalizedCharges = medicalCharges
+      .filter((charge) => charge.name.trim() && Number.isFinite(charge.amount) && charge.amount > 0)
+      .map((charge) => ({ name: charge.name.trim(), amount: Math.round(charge.amount * 100) / 100 }));
+    const chargesChanged = JSON.stringify(appointment?.medicalCharges || []) !== JSON.stringify(normalizedCharges);
+    const totalFee = baseFee + normalizedCharges.reduce((sum, charge) => sum + charge.amount, 0);
     const newRx: Prescription = {
       ...prescriptionData,
       id: createRecordId('rx'),
@@ -519,6 +531,9 @@ export const store = {
           ...a,
           status: 'completed' as Appointment['status'],
           prescription: newRx,
+          medicalCharges: normalizedCharges,
+          feeAmount: totalFee,
+          billingApproved: chargesChanged ? false : appointment?.billingApproved ?? true,
         };
       }
       return a;

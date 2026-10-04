@@ -20,8 +20,8 @@ export const PrintPrescriptionModal: React.FC<PrintPrescriptionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto">
-      <div className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[95vh] flex flex-col">
+    <div className="print-prescription-root fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto">
+      <div className="print-prescription-card relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[95vh] flex flex-col">
         {/* Modal Action Bar (Hidden in Print) */}
         <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200 bg-slate-100 no-print shrink-0 gap-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -253,4 +253,3 @@ export const PrintPrescriptionModal: React.FC<PrintPrescriptionModalProps> = ({
     </div>
   );
 };
-

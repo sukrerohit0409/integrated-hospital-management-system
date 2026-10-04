@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { User, Appointment, Prescription, Tablet } from '../../types';
+import { User, Appointment, Prescription, Tablet, MedicalCharge } from '../../types';
 import { store } from '../../data/store';
 import { 
   Stethoscope, 
@@ -30,6 +30,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
 
   // Consultation Workspace Modal
   const [activeConsultationApt, setActiveConsultationApt] = useState<Appointment | null>(null);
+  const [isSavingConsultation, setIsSavingConsultation] = useState(false);
 
   // Consultation Form State (Prescribed tablets default to 2 blank rows as requested)
   const [diagnosis, setDiagnosis] = useState('');
@@ -45,6 +46,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
   const [newAvoidItem, setNewAvoidItem] = useState('');
   const [followUpDate, setFollowUpDate] = useState('');
   const [doctorNotes, setDoctorNotes] = useState('');
+  const [medicalCharges, setMedicalCharges] = useState<MedicalCharge[]>([]);
 
   // Print Modal State
   const [printPrescription, setPrintPrescription] = useState<Prescription | null>(null);
@@ -118,6 +120,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     setFollowUpDate(apt.prescription?.followUpDate || nextWeek);
     setDoctorNotes(apt.prescription?.doctorNotes || 'Maintain adequate hydration and monitor symptoms.');
+    setMedicalCharges(apt.medicalCharges || []);
 
     // If waiting, update status to in_consultation
     if (apt.status === 'waiting' || apt.status === 'scheduled') {
@@ -155,38 +158,62 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
   };
 
   // Submit Consultation & Generate Prescription
-  const handleSaveConsultation = (e: React.FormEvent) => {
+  const handleSaveConsultation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeConsultationApt) return;
+    if (!activeConsultationApt || isSavingConsultation) return;
+    if (activeConsultationApt.feeCollected
+      && JSON.stringify(activeConsultationApt.medicalCharges || []) !== JSON.stringify(medicalCharges)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'This bill has already been collected. New tests cannot be added to a paid appointment.',
+      }));
+      return;
+    }
 
     const validTablets = tablets.filter((t) => t.name.trim() !== '');
 
-    const savedRx = store.savePrescription(activeConsultationApt.id, {
-      doctorId: currentUser?.id || 'u-doc-1',
-      doctorName: currentUser?.name || 'Dr. Aryan Sharma',
-      doctorSpecialty: currentUser?.specialty || 'Consultant Physician',
-      patientId: activeConsultationApt.patientId,
-      patientName: activeConsultationApt.patientName,
-      patientAge: activeConsultationApt.patientAge,
-      patientGender: activeConsultationApt.patientGender,
-      patientPhone: activeConsultationApt.patientPhone,
-      patientEmail: activeConsultationApt.patientEmail,
-      date: todayStr,
-      diagnosis: diagnosis || 'General Clinical Evaluation & Consultation',
-      symptoms,
-      tablets: validTablets.length > 0 ? validTablets : [
-        { name: 'Standard Medication', dosage: 'As directed', frequency: 'Once daily', duration: '5 Days', instructions: 'After meals' }
-      ],
-      thingsToAvoid: avoidList,
-      followUpDate: followUpDate || undefined,
-      doctorNotes,
-    });
+    setIsSavingConsultation(true);
+    try {
+      const savedRx = store.savePrescription(activeConsultationApt.id, {
+        doctorId: currentUser?.id || 'u-doc-1',
+        doctorName: currentUser?.name || 'Dr. Aryan Sharma',
+        doctorSpecialty: currentUser?.specialty || 'Consultant Physician',
+        patientId: activeConsultationApt.patientId,
+        patientName: activeConsultationApt.patientName,
+        patientAge: activeConsultationApt.patientAge,
+        patientGender: activeConsultationApt.patientGender,
+        patientPhone: activeConsultationApt.patientPhone,
+        patientEmail: activeConsultationApt.patientEmail,
+        date: todayStr,
+        diagnosis: diagnosis || 'General Clinical Evaluation & Consultation',
+        symptoms,
+        tablets: validTablets.length > 0 ? validTablets : [
+          { name: 'Standard Medication', dosage: 'As directed', frequency: 'Once daily', duration: '5 Days', instructions: 'After meals' }
+        ],
+        thingsToAvoid: avoidList,
+        followUpDate: followUpDate || undefined,
+        doctorNotes,
+      }, medicalCharges);
+      await store.flushPendingWrites();
+      setActiveConsultationApt(null);
+      setPrintPrescription(savedRx);
+      setIsPrintModalOpen(true);
+    } catch (error) {
+      console.error('Consultation did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Consultation could not be saved.',
+      }));
+    } finally {
+      setIsSavingConsultation(false);
+    }
+  };
 
-    setActiveConsultationApt(null);
-
-    // Open print preview immediately with Back button and Print button
-    setPrintPrescription(savedRx);
-    setIsPrintModalOpen(true);
+  const updateMedicalCharge = (index: number, field: keyof MedicalCharge, value: string) => {
+    setMedicalCharges((charges) => charges.map((charge, chargeIndex) => {
+      if (chargeIndex !== index) return charge;
+      return field === 'amount'
+        ? { ...charge, amount: Number(value) }
+        : { ...charge, name: value };
+    }));
   };
 
   const handleOpenPrint = (apt: Appointment) => {
@@ -578,6 +605,62 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
                 </div>
               </div>
 
+              <section className="space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h4 className="font-bold text-slate-900">Medical Tests & Additional Charges</h4>
+                    <p className="text-[11px] text-slate-600">These charges are added to the appointment bill for reception to collect.</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={activeConsultationApt.feeCollected}
+                    onClick={() => setMedicalCharges((charges) => [...charges, { name: '', amount: 0 }])}
+                    className="rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Plus className="mr-1 inline h-3.5 w-3.5" />Add test
+                  </button>
+                </div>
+                {medicalCharges.map((charge, index) => (
+                  <div key={index} className="grid grid-cols-[1fr_110px_auto] gap-2">
+                    <input
+                      aria-label={`Test or service ${index + 1}`}
+                      required
+                      disabled={activeConsultationApt.feeCollected}
+                      value={charge.name}
+                      onChange={(event) => updateMedicalCharge(index, 'name', event.target.value)}
+                      placeholder="Test / procedure name"
+                      className="min-w-0 rounded-lg border border-slate-300 bg-white px-2.5 py-2"
+                    />
+                    <input
+                      aria-label={`Charge amount ${index + 1}`}
+                      required
+                      min="0.01"
+                      step="0.01"
+                      type="number"
+                      disabled={activeConsultationApt.feeCollected}
+                      value={charge.amount || ''}
+                      onChange={(event) => updateMedicalCharge(index, 'amount', event.target.value)}
+                      placeholder="₹ Amount"
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2"
+                    />
+                    <button
+                      type="button"
+                      disabled={activeConsultationApt.feeCollected}
+                      onClick={() => setMedicalCharges((charges) => charges.filter((_, chargeIndex) => chargeIndex !== index))}
+                      className="rounded-lg px-2 text-slate-500 hover:text-red-600 disabled:opacity-50"
+                      aria-label={`Remove test ${index + 1}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <p className="text-right text-xs font-semibold text-slate-700">
+                  Bill total: ₹{Math.max(0, activeConsultationApt.feeAmount
+                    - (activeConsultationApt.medicalCharges || []).reduce((sum, charge) => sum + charge.amount, 0)
+                    + medicalCharges.reduce((sum, charge) => sum + (Number.isFinite(charge.amount) ? charge.amount : 0), 0))}
+                </p>
+              </section>
+
               {/* Things to Avoid Section (Requested by user) */}
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5 text-slate-900 font-bold">
@@ -672,10 +755,11 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
                 </button>
                 <button
                   type="submit"
+                  disabled={isSavingConsultation}
                   className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Save Prescription & Complete Visit</span>
+                  <span>{isSavingConsultation ? 'Saving Consultation…' : 'Save Prescription & Complete Visit'}</span>
                 </button>
               </div>
             </form>

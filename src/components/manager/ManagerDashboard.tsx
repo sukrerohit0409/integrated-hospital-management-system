@@ -147,12 +147,28 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
     }
   };
 
-  const handleApproveLeave = (id: string) => {
+  const handleApproveLeave = async (id: string) => {
     store.updateLeaveStatus(id, 'approved', currentUser.name);
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Leave approval did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Leave approval could not be saved.',
+      }));
+    }
   };
 
-  const handleRejectLeave = (id: string) => {
+  const handleRejectLeave = async (id: string) => {
     store.updateLeaveStatus(id, 'rejected', currentUser.name);
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Leave rejection did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Leave decision could not be saved.',
+      }));
+    }
   };
 
   return (

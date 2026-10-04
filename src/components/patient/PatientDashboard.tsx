@@ -268,8 +268,17 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
     setActiveTab('history');
   };
 
-  const handleSkipFollowUp = (aptId: string) => {
+  const handleSkipFollowUp = async (aptId: string) => {
     store.updateFollowUpStatus(aptId, 'skipped');
+    try {
+      await store.flushPendingWrites();
+      setActiveTab('history');
+    } catch (error) {
+      console.error('Could not mark the follow-up as skipped:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Follow-up status could not be updated.',
+      }));
+    }
   };
 
   const handleViewPrescription = (rx: Prescription) => {

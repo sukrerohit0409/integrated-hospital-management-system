@@ -73,7 +73,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
     setShiftNote('');
   };
 
-  const handleApplyLeave = (e: React.FormEvent) => {
+  const handleApplyLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !leaveStart || !leaveEnd || !leaveReason) return;
     if (leaveEnd < leaveStart) {
@@ -89,6 +89,15 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
       endDate: leaveEnd,
       reason: leaveReason,
     });
+    try {
+      await store.flushPendingWrites();
+    } catch (error) {
+      console.error('Leave application did not reach the shared database:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Leave application could not be saved.',
+      }));
+      return;
+    }
 
     setLeaveStart('');
     setLeaveEnd('');

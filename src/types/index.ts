@@ -78,11 +78,18 @@ export interface Appointment {
   reasonForVisit: string;
   feeCollected: boolean;
   feeAmount: number;
+  medicalCharges?: MedicalCharge[];
+  billingApproved?: boolean;
   paymentMethod?: 'Cash' | 'Card' | 'UPI';
   paidAt?: string;
   prescription?: Prescription;
   followUpStatus?: 'pending' | 'booked' | 'skipped';
   createdAt: string;
+}
+
+export interface MedicalCharge {
+  name: string;
+  amount: number;
 }
 
 export interface AttendanceRecord {

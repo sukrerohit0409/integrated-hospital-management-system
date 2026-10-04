@@ -406,6 +406,9 @@ set search_path = ''
 as $$
 declare
   actor_role public.ihms_role := public.current_ihms_role();
+  old_charge_total numeric := 0;
+  new_charge_total numeric := 0;
+  base_fee numeric := 0;
 begin
   if actor_role in ('admin', 'manager') then
     new.updated_at := now();
@@ -427,7 +430,7 @@ begin
         or (to_jsonb(new) - 'payload' - 'updated_at')
           <> (to_jsonb(old) - 'payload' - 'updated_at')
         or (new.payload - 'followUpStatus') <> (old.payload - 'followUpStatus')
-        or old.payload ->> 'followUpStatus' is distinct from 'pending'
+        or coalesce(old.payload ->> 'followUpStatus', 'pending') is distinct from 'pending'
         or new.payload ->> 'followUpStatus' is null
         or new.payload ->> 'followUpStatus' not in ('booked', 'skipped')
       then
@@ -437,17 +440,64 @@ begin
       if old.doctor_id <> (select auth.uid())::text
         or (to_jsonb(new) - 'payload' - 'updated_at')
           <> (to_jsonb(old) - 'payload' - 'updated_at')
-        or (new.payload - 'status')
-          <> (old.payload - 'status')
+        or (new.payload - 'status' - 'medicalCharges' - 'feeAmount' - 'billingApproved')
+          <> (old.payload - 'status' - 'medicalCharges' - 'feeAmount' - 'billingApproved')
+        or (
+          coalesce(new.payload -> 'billingApproved', 'true'::jsonb)
+            is distinct from coalesce(old.payload -> 'billingApproved', 'true'::jsonb)
+          and coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)
+            is not distinct from coalesce(old.payload -> 'medicalCharges', '[]'::jsonb)
+          and new.payload -> 'feeAmount' is not distinct from old.payload -> 'feeAmount'
+        )
         or coalesce(new.payload ->> 'status', '') not in ('in_consultation', 'completed')
       then
         raise exception 'Doctors may only update their assigned consultations';
       end if;
+      if coalesce(old.payload ->> 'feeCollected', 'false') = 'true'
+        and (
+          coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)
+            is distinct from coalesce(old.payload -> 'medicalCharges', '[]'::jsonb)
+          or new.payload -> 'feeAmount' is distinct from old.payload -> 'feeAmount'
+        )
+      then
+        raise exception 'Medical charges cannot be changed after fee collection';
+      end if;
+      if jsonb_typeof(coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)) is distinct from 'array'
+        or exists (
+          select 1
+          from jsonb_array_elements(coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)) as charges(charge)
+          where jsonb_typeof(charge) is distinct from 'object'
+            or btrim(coalesce(charge ->> 'name', '')) = ''
+            or coalesce(charge ->> 'amount', '') !~ '^[0-9]+(\.[0-9]{1,2})?$'
+            or (charge ->> 'amount')::numeric <= 0
+        )
+      then
+        raise exception 'Medical charges must have a name and a positive amount';
+      end if;
+      if coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)
+          is distinct from coalesce(old.payload -> 'medicalCharges', '[]'::jsonb)
+        or new.payload -> 'feeAmount' is distinct from old.payload -> 'feeAmount'
+      then
+        new.payload := jsonb_set(new.payload, '{billingApproved}', 'false'::jsonb, true);
+        select coalesce(sum((charge ->> 'amount')::numeric), 0)
+        into old_charge_total
+        from jsonb_array_elements(coalesce(old.payload -> 'medicalCharges', '[]'::jsonb)) as charges(charge);
+        select coalesce(sum((charge ->> 'amount')::numeric), 0)
+        into new_charge_total
+        from jsonb_array_elements(coalesce(new.payload -> 'medicalCharges', '[]'::jsonb)) as charges(charge);
+        base_fee := coalesce((old.payload ->> 'feeAmount')::numeric, 650) - old_charge_total;
+        if base_fee <= 0
+          or coalesce(new.payload ->> 'feeAmount', '') !~ '^[0-9]+(\.[0-9]{1,2})?$'
+          or (new.payload ->> 'feeAmount')::numeric <> base_fee + new_charge_total
+        then
+          raise exception 'Appointment total must equal the base fee plus the listed medical charges';
+        end if;
+      end if;
     elsif actor_role = 'receptionist' then
       if (to_jsonb(new) - 'payload' - 'updated_at')
           <> (to_jsonb(old) - 'payload' - 'updated_at')
-        or (new.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt')
-          <> (old.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt')
+        or (new.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
+          <> (old.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
         or coalesce(new.payload ->> 'status', '') not in (
           'scheduled', 'waiting', 'in_consultation', 'completed', 'cancelled'
         )
@@ -465,6 +515,16 @@ begin
           and (
             coalesce(new.payload ->> 'paymentMethod', '') not in ('Cash', 'Card', 'UPI')
             or new.payload ->> 'paidAt' is null
+            or coalesce(new.payload ->> 'billingApproved', 'true') <> 'true'
+          )
+        )
+        or (
+          coalesce(new.payload ->> 'billingApproved', 'true')
+            is distinct from coalesce(old.payload ->> 'billingApproved', 'true')
+          and (
+            coalesce(old.payload ->> 'feeCollected', 'false') <> 'false'
+            or new.payload ->> 'feeCollected' <> 'true'
+            or new.payload ->> 'billingApproved' <> 'true'
           )
         )
       then
@@ -582,6 +642,7 @@ begin
         true
       );
       new.payload := jsonb_set(new.payload, '{feeCollected}', 'false'::jsonb, true);
+      new.payload := jsonb_set(new.payload, '{billingApproved}', 'true'::jsonb, true);
       new.payload := jsonb_set(new.payload, '{status}', '"scheduled"'::jsonb, true);
       new.payload := jsonb_set(new.payload, '{followUpStatus}', '"pending"'::jsonb, true);
       new.payload := new.payload - 'paymentMethod' - 'paidAt';

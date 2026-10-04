@@ -8,6 +8,7 @@ A comprehensive, role-based hospital management web application built with **Rea
 - **Appointment Management** — Online booking, walk-in registration, queue management, and slot checker
 - **Digital Prescriptions** — Doctors write prescriptions with print-ready modal
 - **Fee Collection & Billing** — Cash / Card / UPI payment tracking with real-time revenue reports
+- **Medical Test Charges** — Doctors can add consultation charges; reception must review and approve them before collection
 - **Staff Attendance** — Clock in/out, working hours & days tracking
 - **Leave Management** — Staff apply for leave, Managers approve/reject
 - **Revenue & Expense Analytics** — Date-filtered financial dashboards for Admin
@@ -107,6 +108,8 @@ Without Supabase environment variables, development mode uses browser-local demo
     - `SUPABASE_ANON_KEY`
     - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never prefix with `VITE_`)
 12. Test registration, confirmation, login, logout, password change, staff invitations, and a booking using separate browser profiles for different roles. Verify that a patient cannot see another patient's records and that reception cannot read prescriptions. Also test two users booking the same doctor/time; only one should succeed.
+
+After deploying an application update that changes database policies, triggers, or validation, rerun the current [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL Editor before testing the affected workflows. The schema is designed to be reapplied to an existing installation; back up production data before applying database changes.
 
 The cloud database starts empty. Existing local demo accounts and browser data are not uploaded automatically. The schema stores bookings, prescriptions, attendance, leave, revenue, and expenses as shared records. Row Level Security limits each role's access. The unique doctor/date/time index prevents duplicate online/follow-up bookings, and follow-up requests are linked to their source visit.
 

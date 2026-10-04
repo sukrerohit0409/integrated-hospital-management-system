@@ -35,6 +35,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   const [selectedAptForFee, setSelectedAptForFee] = useState<Appointment | null>(null);
   const [feeAmount, setFeeAmount] = useState('650');
   const [paymentMode, setPaymentMode] = useState<'Cash' | 'Card' | 'UPI'>('Cash');
+  const [billReviewed, setBillReviewed] = useState(false);
 
   // Walk-in Form State
   const [walkinName, setWalkinName] = useState('');
@@ -86,6 +87,8 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   }, [revenue, todayStr]);
 
   const todayTotalCollected = todayRevenue.reduce((acc, cur) => acc + cur.amount, 0);
+  const requiresBillReview = Boolean(selectedAptForFee
+    && (selectedAptForFee.billingApproved === false || selectedAptForFee.medicalCharges?.length));
 
   const todayCollectionByMode = useMemo(() => {
     const res = { Cash: 0, Card: 0, UPI: 0 };
@@ -105,11 +108,36 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   const handleOpenFeeModal = (apt: Appointment) => {
     setSelectedAptForFee(apt);
     setFeeAmount(String(apt.feeAmount || 650));
+    setBillReviewed(false);
   };
 
   const handleConfirmFeeCollection = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedAptForFee) return;
+    const currentApt = store.getAppointments().find((appointment) => appointment.id === selectedAptForFee.id);
+    if (!currentApt) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'This appointment is no longer available. Refresh the queue before collecting payment.',
+      }));
+      return;
+    }
+    if (currentApt.feeAmount !== selectedAptForFee.feeAmount
+      || currentApt.billingApproved !== selectedAptForFee.billingApproved
+      || JSON.stringify(currentApt.medicalCharges || []) !== JSON.stringify(selectedAptForFee.medicalCharges || [])) {
+      setSelectedAptForFee(currentApt);
+      setFeeAmount(String(currentApt.feeAmount || 650));
+      setBillReviewed(false);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'The appointment bill changed while you were reviewing it. Review the latest charges before collecting payment.',
+      }));
+      return;
+    }
+    if (requiresBillReview && !billReviewed) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Review and approve the doctor-entered test charges before collecting this bill.',
+      }));
+      return;
+    }
 
     store.collectFee(
       selectedAptForFee.id,
@@ -495,12 +523,22 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                               Paid ₹{apt.feeAmount} ({apt.paymentMethod})
                             </span>
                           ) : (
-                            <button
-                              onClick={() => handleOpenFeeModal(apt)}
-                              className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors"
-                            >
-                              Collect ₹{apt.feeAmount}
-                            </button>
+                            <div>
+                              {apt.billingApproved === false && (
+                                <span className="block text-[10px] font-semibold text-indigo-700">Bill requires review</span>
+                              )}
+                              {apt.medicalCharges?.map((charge, index) => (
+                                <span key={`${apt.id}-charge-${index}`} className="block text-[10px] text-slate-500">
+                                  {charge.name}: ₹{charge.amount}
+                                </span>
+                              ))}
+                              <button
+                                onClick={() => handleOpenFeeModal(apt)}
+                                className="mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors"
+                              >
+                                Collect ₹{apt.feeAmount}
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td className="py-2.5 px-4">
@@ -989,6 +1027,32 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono font-bold text-sm"
                 />
               </div>
+              {requiresBillReview && (
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                  <p className="mb-1 font-semibold text-slate-700">Doctor-requested tests / services</p>
+                  {(selectedAptForFee.medicalCharges || []).map((charge, index) => (
+                    <div key={`${selectedAptForFee.id}-bill-${index}`} className="flex justify-between gap-3 text-slate-600">
+                      <span>{charge.name}</span><span className="font-mono">₹{charge.amount}</span>
+                    </div>
+                  ))}
+                  {!selectedAptForFee.medicalCharges?.length && (
+                    <p className="text-slate-600">The doctor updated the appointment bill. Review the total before collection.</p>
+                  )}
+                  <div className="mt-2 flex justify-between border-t border-indigo-200 pt-2 font-bold text-slate-900">
+                    <span>Total due</span><span>₹{selectedAptForFee.feeAmount}</span>
+                  </div>
+                  <label className="mt-3 flex items-start gap-2 border-t border-indigo-200 pt-3 text-slate-700">
+                    <input
+                      type="checkbox"
+                      required
+                      checked={billReviewed}
+                      onChange={(event) => setBillReviewed(event.target.checked)}
+                      className="mt-0.5 accent-indigo-700"
+                    />
+                    <span>I reviewed and approve these test charges and the total bill.</span>
+                  </label>
+                </div>
+              )}
 
               <div>
                 <label className="block text-slate-700 font-semibold mb-1">Payment Method</label>
@@ -1020,6 +1084,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                 </button>
                 <button
                   type="submit"
+                  disabled={requiresBillReview && !billReviewed}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg shadow-2xs"
                 >
                   Confirm ₹{feeAmount} Received
