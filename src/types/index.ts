@@ -1,12 +1,12 @@
-export type UserRole = 
-  | 'admin' 
-  | 'manager' 
-  | 'doctor' 
-  | 'receptionist' 
-  | 'nurse' 
-  | 'cleaner' 
-  | 'ward_boy' 
-  | 'other' 
+export type UserRole =
+  | 'admin'
+  | 'manager'
+  | 'doctor'
+  | 'receptionist'
+  | 'nurse'
+  | 'cleaner'
+  | 'ward_boy'
+  | 'other'
   | 'patient';
 
 export interface User {
@@ -24,6 +24,7 @@ export interface User {
   specialty?: string;
   qualification?: string;
   isOnline: boolean;
+  mustSetPassword?: boolean;
   status: 'active' | 'on_leave' | 'inactive';
   avatar?: string;
   createdAt: string;

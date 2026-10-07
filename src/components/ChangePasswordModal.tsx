@@ -8,12 +8,14 @@ interface ChangePasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: User | null;
+  onPasswordUpdated: () => void;
 }
 
 export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   isOpen,
   onClose,
   currentUser,
+  onPasswordUpdated,
 }) => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -28,14 +30,15 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     setError('');
     setSuccess(false);
 
+    const mustSetPassword = Boolean(currentUser.mustSetPassword);
     const actualCurrentPass = currentUser.password || currentUser.email;
-    if (!supabase && currentPassword !== actualCurrentPass) {
+    if (!supabase && !mustSetPassword && currentPassword !== actualCurrentPass) {
       setError('Current password does not match our records.');
       return;
     }
 
-    if (newPassword.length < (supabase ? 8 : 4)) {
-      setError(`New password must be at least ${supabase ? 8 : 4} characters long.`);
+    if (newPassword.length < (supabase || mustSetPassword ? 8 : 4)) {
+      setError(`New password must be at least ${supabase || mustSetPassword ? 8 : 4} characters long.`);
       return;
     }
 
@@ -45,19 +48,25 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     }
 
     if (supabase) {
-      const { error: verificationError } = await supabase.auth.signInWithPassword({
-        email: currentUser.email,
-        password: currentPassword,
-      });
-      if (verificationError) {
-        setError('Current password does not match our records.');
-        return;
+      if (!mustSetPassword) {
+        const { error: verificationError } = await supabase.auth.signInWithPassword({
+          email: currentUser.email,
+          password: currentPassword,
+        });
+        if (verificationError) {
+          setError('Current password does not match our records.');
+          return;
+        }
       }
-      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
+        ...(mustSetPassword ? { data: { mustSetPassword: false } } : {}),
+      });
       if (updateError) {
         setError(updateError.message);
         return;
       }
+      onPasswordUpdated();
       setSuccess(true);
       setTimeout(() => {
         setSuccess(false);
@@ -86,12 +95,14 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
             <KeyRound className="w-4 h-4 text-teal-600" />
             <h3 className="text-sm font-bold text-slate-900">Change Password</h3>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!currentUser.mustSetPassword && (
+            <button
+              onClick={onClose}
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 text-xs overflow-y-auto grow">
@@ -114,19 +125,21 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
             </div>
           )}
 
-          <div>
-            <label className="block text-slate-700 font-semibold mb-1">
-              Current Password
-            </label>
-            <input
-              type="password"
-              required
-              placeholder="Enter your current password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
-            />
-          </div>
+          {!currentUser.mustSetPassword && (
+            <div>
+              <label className="block text-slate-700 font-semibold mb-1">
+                Current Password
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="Enter your current password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-slate-700 font-semibold mb-1">
@@ -157,18 +170,20 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           </div>
 
           <div className="pt-2 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
+            {!currentUser.mustSetPassword && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            )}
             <button
               type="submit"
               className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-xs transition-colors"
             >
-              Save New Password
+              {currentUser.mustSetPassword ? 'Set Password' : 'Save New Password'}
             </button>
           </div>
         </form>

@@ -18,9 +18,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   onLoginSuccess,
 }) => {
   const [isRegister, setIsRegister] = useState(false);
-  const [identifier, setIdentifier] = useState(''); // email or phone
+  const [identifier, setIdentifier] = useState(''); // email, or phone in local demo mode
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [registrationMessage, setRegistrationMessage] = useState('');
 
   // Register form states (for Patient registration)
   const [regName, setRegName] = useState('');
@@ -45,24 +46,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       const cleanId = identifier.trim();
       let emailToUse = cleanId.toLowerCase();
       if (!cleanId.includes('@')) {
-        const cleanPhone = cleanId.replace(/\D/g, '');
-        if (cleanPhone) {
-          emailToUse = `patient_${cleanPhone}@hospital.local`;
-        } else {
-          setError('Sign in with your registered email address or mobile number.');
-          return;
-        }
+        setError('Use your registered email address to sign in when the shared Supabase portal is enabled.');
+        return;
       }
       const { error } = await supabase.auth.signInWithPassword({
         email: emailToUse,
         password,
       });
       if (error) {
-        if (!cleanId.includes('@')) {
-          setError('Sign in failed. Check your mobile number and password, or use your email address.');
-        } else {
-          setError('Sign in failed. Check your credentials and try again.');
-        }
+        setError('Sign in failed. Check your registered email address and password.');
         return;
       }
       try {
@@ -79,7 +71,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     const users = store.getUsers();
     const cleanId = identifier.trim().toLowerCase();
-    
+
     // Find by email or phone
     const user = users.find(
       (u) =>
@@ -89,6 +81,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
     if (!user) {
       setError('User account not found with this email or mobile number.');
+      return;
+    }
+
+    if (user.status === 'inactive') {
+      setError('This account is inactive. Contact a hospital administrator.');
       return;
     }
 
@@ -107,9 +104,15 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setRegistrationMessage('');
 
     if (import.meta.env.PROD && !supabase) {
       setError('Authentication is not configured. Contact the site administrator.');
+      return;
+    }
+
+    if (!supabase) {
+      setError('Email verification is unavailable in demo mode. Configure Supabase to register a patient account.');
       return;
     }
 
@@ -118,74 +121,47 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       return;
     }
 
-    if (supabase) {
-      if (regPassword.length < 8) {
-        setError('Password must be at least 8 characters long.');
-        return;
-      }
-      const { data, error } = await supabase.auth.signUp({
-        email: regEmail.trim().toLowerCase(),
-        password: regPassword,
-        options: {
-          data: {
-            name: regName.trim(),
-            phone: regPhone.trim(),
-            age: parseInt(regAge, 10) || 30,
-            gender: regGender,
-          },
-        },
-      });
-      if (error) {
-        setError(getAuthErrorMessage(error.message));
-        return;
-      }
-      if (!data.session) {
-        // In case Supabase auto-confirmed or allows immediate sign in
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email: regEmail.trim().toLowerCase(),
-          password: regPassword,
-        });
-        if (signInError) {
-          setError('Account created! Sign in using your registered credentials.');
-          setIsRegister(false);
-          return;
-        }
-      }
-      try {
-        const user = await getSignedInProfile();
-        if (!user) throw new Error('Account created but its profile could not be loaded.');
-        onLoginSuccess(user);
-        onClose();
-      } catch (profileError) {
-        setError(profileError instanceof Error ? profileError.message : 'Could not load your new profile.');
-      }
+    if (regPassword.length < 8) {
+      setError('Password must be at least 8 characters long.');
       return;
     }
-
-    const users = store.getUsers();
-    const existing = users.find(
-      (u) => u.email.toLowerCase() === regEmail.trim().toLowerCase()
-    );
-    if (existing) {
-      setError('An account with this email address already exists.');
-      return;
-    }
-
-    const newUser = store.addUser({
-      name: regName.trim(),
+    const { data, error } = await supabase.auth.signUp({
       email: regEmail.trim().toLowerCase(),
-      phone: regPhone.trim(),
-      role: 'patient',
-      age: parseInt(regAge) || 30,
-      gender: regGender,
-      password: regPassword || regEmail.trim().toLowerCase(),
-      status: 'active',
-      department: 'General OPD',
+      password: regPassword,
+      options: {
+        emailRedirectTo: window.location.origin,
+        data: {
+          name: regName.trim(),
+          phone: regPhone.trim(),
+          age: parseInt(regAge, 10) || 30,
+          gender: regGender,
+        },
+      },
     });
+    if (error) {
+      setError(getAuthErrorMessage(error.message));
+      return;
+    }
+    if (!data.user) {
+      setError('Supabase did not return the newly registered account. Please try again.');
+      return;
+    }
 
-    store.setCurrentUser(newUser);
-    onLoginSuccess(newUser);
-    onClose();
+    if (data.session) {
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+      if (signOutError) {
+        setError(`Email confirmation is not enabled, and the automatic session could not be cleared: ${signOutError.message}`);
+        return;
+      }
+      setError('Email confirmation is disabled for this Supabase project. Ask the administrator to enable Confirm email before registering patients.');
+      return;
+    }
+
+    setRegistrationMessage(
+      `Account created. Check ${regEmail.trim()} for the confirmation email, then return here to sign in.`
+    );
+    setIsRegister(false);
+    setPassword('');
   };
 
   return (
@@ -214,6 +190,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-xs text-red-700">
               <ShieldAlert className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
               <span>{error}</span>
+            </div>
+          )}
+          {registrationMessage && (
+            <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800" role="status">
+              {registrationMessage}
             </div>
           )}
 
@@ -305,24 +286,30 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 />
               </div>
 
+              <p className={`text-[11px] ${supabase ? 'text-teal-800' : 'text-amber-800'}`}>
+                {supabase
+                  ? 'We will email you a confirmation link. You must confirm your email before signing in.'
+                  : 'Email verification is unavailable in demo mode. Connect Supabase to register a patient account.'}
+              </p>
+
               <button
                 type="submit"
                 className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-xs transition-colors flex items-center justify-center gap-2 mt-2"
               >
                 <UserPlus className="w-4 h-4" />
-                <span>Create Patient Profile & Sign In</span>
+                <span>Create Patient Account</span>
               </button>
             </form>
           ) : (
             <form onSubmit={handleLogin} className="space-y-3.5 text-xs">
               <div>
                 <label className="block text-slate-700 font-semibold mb-1">
-                  Email Address or Mobile Number
+                  {supabase ? 'Registered Email Address' : 'Email Address or Mobile Number'}
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. rohit@gmail.com or 1122334455"
+                  placeholder={supabase ? 'e.g. rohit@gmail.com' : 'e.g. rohit@gmail.com or 1122334455'}
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
@@ -360,6 +347,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               onClick={() => {
                 setIsRegister(!isRegister);
                 setError('');
+                setRegistrationMessage('');
               }}
               className="text-teal-700 font-semibold hover:underline"
             >

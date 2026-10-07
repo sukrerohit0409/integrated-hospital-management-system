@@ -57,11 +57,13 @@ npm run build
 npm run start
 ```
 
-GitHub Actions runs `npm ci`, the TypeScript check, and the production build for every push and pull request.
+The repository-root GitHub Actions workflow runs `npm ci`, the frontend and API TypeScript checks, and the production build for every push and pull request.
 
 ## Local demo mode
 
-Without Supabase environment variables, development mode uses browser-local demo data. These accounts are public sample credentials and must never be used for real patient or hospital information. With Supabase configured, dashboards load from the shared database and new changes are synchronized to other signed-in users; the app does not import browser demo records into Supabase.
+Without Supabase environment variables, development mode uses browser-local demo data. These accounts are public sample credentials and must never be used for real patient or hospital information. Email verification and patient account registration are unavailable in demo mode; public registration is blocked, and reception can register a walk-in visit without creating a portal account. With Supabase configured, dashboards load from the shared database and new changes are synchronized to other signed-in users; the app does not import browser demo records into Supabase.
+
+Authentication is isolated per browser tab. Opening a duplicated tab does not copy the signed-in user session; sign in separately in each tab. Reloading the same tab preserves its session.
 
 | Role | Email | Password |
 |------|-------|----------|
@@ -80,13 +82,13 @@ Without Supabase environment variables, development mode uses browser-local demo
 2. In **Project Settings → API**, copy the Project URL and the publishable/anon key. The browser uses only these public values; never use the service-role key in frontend code.
 3. Open **SQL Editor → New query**, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. Use a clean Supabase database for a new deployment. The script also supports the earlier auth-only schema; back up existing production data before applying schema upgrades.
 4. In **Table Editor**, verify that `profiles`, `ihms_records`, and `ihms_prescriptions` exist. In **Database → Publications**, verify that the tables are part of `supabase_realtime` (the script adds them). Keep Row Level Security enabled on all three tables; the script creates their role/ownership policies.
-5. In **Authentication → URL Configuration**, set the Site URL to your production Vercel URL and add the local and deployment callback URLs to Redirect URLs, for example `http://localhost:3000/**` and `https://<your-project>.vercel.app/**`. Add your custom domain and preview domain patterns if used. Configure email confirmation; configure a production SMTP provider before inviting real users.
+5. In **Authentication → URL Configuration**, set the Site URL to your production Vercel URL and add the local and deployment callback URLs to Redirect URLs, for example `http://localhost:3000/**` and `https://<your-project>.vercel.app/**`. Add your custom domain and preview domain patterns if used. In **Authentication → Providers → Email**, enable **Confirm email**. Configure a production SMTP provider before registering or inviting real users; without confirmation enabled, the app refuses an immediate signup session and reports the configuration problem.
 
 ### Connect the application and bootstrap its first admin
 
 6. Copy `.env.example` to `.env.local`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for local browser access. Keep `SUPABASE_SERVICE_ROLE_KEY` and any provider API keys server-side; do not commit `.env.local`.
-7. For UI-only local work, start Vite with `npm run dev`. For staff invitations and account management, the `/api/staff` endpoint must run as a Vercel function: sign in to the Vercel CLI with `npx vercel login`, link this folder to your Vercel project with `npx vercel link`, then start the whole app with `npx vercel dev` (not `npm run dev`). This command loads the server-side variables from `.env.local`; never copy the service-role key into a `VITE_` variable. If Vercel asks for a port, use the prompted available port.
-8. Register the first account through the app's patient registration form and confirm its email if confirmation is enabled. In Supabase **Authentication → Users**, copy that user's UUID. In **SQL Editor**, promote only this trusted account:
+7. For UI-only local work, start Vite with `npm run dev`. Patient portal invitations from reception use the `/api/staff` endpoint as a Vercel function: sign in to the Vercel CLI with `npx vercel login`, link this folder to your Vercel project with `npx vercel link`, then start the whole app with `npx vercel dev` (not `npm run dev`). This command loads the server-side variables from `.env.local`; never copy the service-role key into a `VITE_` variable. If Vercel asks for a port, use the prompted available port.
+8. Register the first account through the app's patient registration form and confirm its email before signing in. In Supabase **Authentication → Users**, copy that user's UUID. In **SQL Editor**, promote only this trusted account:
 
    ```sql
    update public.profiles
@@ -96,24 +98,24 @@ Without Supabase environment variables, development mode uses browser-local demo
    ```
 
    Confirm that exactly one row was updated, then sign out and sign back in so the app reloads the new role. Patient self-registration always receives the `patient` role.
-9. Use the Admin or Manager dashboard to invite staff. Configure the Vercel server-only variables below before testing invitations. Reception can invite a patient portal account from the walk-in workflow when the patient provides an email address.
+9. Staff invitations from the Admin and Manager dashboards are currently disabled. Existing staff can still be managed; staff account onboarding must wait until an email-verification workflow is implemented. Reception can optionally invite a patient portal account using the patient's real email address; the recipient must accept the emailed link and set a password before accessing the portal. Walk-in registration without a portal account remains available.
 
 ### Deploy and verify
 
-10. Push the project to GitHub and import that repository into Vercel. Vercel uses `npm run build` and `dist` as configured in [`vercel.json`](./vercel.json).
+10. Push the project to GitHub and import that repository into Vercel. The application is stored at the repository root; use the repository root as Vercel's Root Directory. Vercel uses `npm run build` and `dist` as configured in [`vercel.json`](./vercel.json).
 11. In Vercel **Project → Settings → Environment Variables**, set these for Preview and Production, then redeploy:
     - `VITE_SUPABASE_URL`
     - `VITE_SUPABASE_ANON_KEY`
     - `SUPABASE_URL`
     - `SUPABASE_ANON_KEY`
     - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never prefix with `VITE_`)
-12. Test registration, confirmation, login, logout, password change, staff invitations, and a booking using separate browser profiles for different roles. Verify that a patient cannot see another patient's records and that reception cannot read prescriptions. Also test two users booking the same doctor/time; only one should succeed.
+12. Test registration, email confirmation, login, logout, password change, a receptionist patient invitation, and a booking using separate browser profiles for different roles. Confirm that staff invitations are unavailable. Verify that a patient cannot see another patient's records and that reception cannot read prescriptions. Also test two users booking the same doctor/time; only one should succeed.
 
 After deploying an application update that changes database policies, triggers, or validation, rerun the current [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL Editor before testing the affected workflows. The schema is designed to be reapplied to an existing installation; back up production data before applying database changes.
 
 The cloud database starts empty. Existing local demo accounts and browser data are not uploaded automatically. The schema stores bookings, prescriptions, attendance, leave, revenue, and expenses as shared records. Row Level Security limits each role's access. The unique doctor/date/time index prevents duplicate online/follow-up bookings, and follow-up requests are linked to their source visit. Date-only workflows use India Standard Time (`Asia/Kolkata`); attendance clock-in/out timestamps and worked hours are generated by the database rather than trusted from the browser.
 
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are read by the server-side [`api/staff.ts`](./api/staff.ts) endpoint, which checks the caller's role before assigning a new account role. Never expose the service-role key to the browser or commit it to GitHub.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are read by the server-side [`api/staff.ts`](./api/staff.ts) endpoint, which checks the caller's role before sending a patient portal invitation and assigning its role. Staff invitations are rejected by the endpoint. Payment collection and the corresponding revenue record are written together by a database trigger; rerun the schema before enabling the updated app. Never expose the service-role key to the browser or commit it to GitHub.
 
 This is an educational demo foundation, not a compliance certification or a substitute for clinical security review. Before handling real patient/financial information, review local healthcare/privacy requirements, backups, audit trails, retention, MFA, access review, and operational recovery. Never expose the Supabase service-role key in browser code.
 

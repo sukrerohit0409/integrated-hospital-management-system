@@ -1,22 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, Prescription, Tablet, MedicalCharge } from '../../types';
 import { store } from '../../data/store';
-import { 
-  Stethoscope, 
-  Clock, 
-  Calendar, 
-  CheckCircle2, 
-  Plus, 
-  Trash2, 
-  Printer, 
-  AlertTriangle, 
+import {
+  Stethoscope,
+  Clock,
+  Calendar,
+  CheckCircle2,
+  Plus,
+  Trash2,
+  Printer,
+  AlertTriangle,
   FileText,
   UserCheck,
   Search,
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
-import { addCalendarDays, getHospitalDate } from '../../utils/hospitalDate';
+import { getHospitalDate, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 
 interface DoctorDashboardProps {
   currentUser: User | null;
@@ -25,6 +25,7 @@ interface DoctorDashboardProps {
 export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser }) => {
   // Filters: now, upcoming, completed
   const [filter, setFilter] = useState<'now' | 'upcoming' | 'completed'>('now');
+  const [now, setNow] = useState(() => new Date());
 
   const [appointments, setAppointments] = useState<Appointment[]>(() => store.getAppointments());
   const [search, setSearch] = useState('');
@@ -40,10 +41,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
     { name: '', dosage: '', frequency: '', duration: '', instructions: '' }
   ]);
-  const [avoidList, setAvoidList] = useState<string[]>([
-    'Avoid cold drinks, oily fried food, and ice creams',
-    'Avoid heavy physical strain and irregular sleep'
-  ]);
+  const [avoidList, setAvoidList] = useState<string[]>([]);
   const [newAvoidItem, setNewAvoidItem] = useState('');
   const [followUpDate, setFollowUpDate] = useState('');
   const [doctorNotes, setDoctorNotes] = useState('');
@@ -59,7 +57,12 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     }) : undefined;
   }, []);
 
-  const todayStr = getHospitalDate();
+  React.useEffect(() => {
+    const interval = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const todayStr = getHospitalDate(now);
   const doctorId = currentUser?.id || 'u-doc-1';
 
   // Filter doctor's appointments
@@ -72,6 +75,28 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     });
   }, [appointments, currentUser, doctorId]);
 
+  const isUpcomingAppointment = (appointment: Appointment) =>
+    appointment.status !== 'completed'
+    && appointment.status !== 'cancelled'
+    && (
+      appointment.date > todayStr
+      || (
+        appointment.date === todayStr
+        && !isHospitalTimeSlotPast(appointment.date, appointment.timeSlot, now)
+      )
+    );
+
+  const isQueueAppointment = (appointment: Appointment) =>
+    appointment.date === todayStr
+    && (
+      appointment.status === 'in_consultation'
+      || appointment.status === 'waiting'
+      || (
+        appointment.status === 'scheduled'
+        && isHospitalTimeSlotPast(appointment.date, appointment.timeSlot, now)
+      )
+    );
+
   // Specific 3 filters requested: now, upcoming, completed
   const filteredAppointments = useMemo(() => {
     return doctorAppointments.filter((a) => {
@@ -82,12 +107,10 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
       if (!matchSearch) return false;
 
       if (filter === 'now') {
-        // Patients currently in consultation or waiting in lounge today
-        return (a.status === 'in_consultation' || a.status === 'waiting') && a.date === todayStr;
+        return isQueueAppointment(a);
       }
       if (filter === 'upcoming') {
-        // Scheduled appointments for today later or future dates
-        return a.status === 'scheduled' || (a.date > todayStr && a.status !== 'completed' && a.status !== 'cancelled');
+        return isUpcomingAppointment(a);
       }
       if (filter === 'completed') {
         // Consulted patients with prescriptions
@@ -95,14 +118,21 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
       }
       return true;
     });
-  }, [doctorAppointments, filter, search, todayStr]);
+  }, [doctorAppointments, filter, search, todayStr, now]);
 
   // Open Consultation
   const handleStartConsultation = (apt: Appointment) => {
+    if (apt.date > todayStr && apt.status !== 'in_consultation') {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Future appointments cannot be started before their scheduled date.',
+      }));
+      return;
+    }
+
     setActiveConsultationApt(apt);
     setDiagnosis(apt.prescription?.diagnosis || '');
     setSymptoms(apt.prescription?.symptoms || apt.reasonForVisit || '');
-    
+
     // When doctor makes prescription, tablets table starts blank with exactly 2 blank rows
     setTablets(
       apt.prescription?.tablets && apt.prescription.tablets.length > 0
@@ -112,15 +142,9 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
             { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
           ]
     );
-    setAvoidList(
-      apt.prescription?.thingsToAvoid || [
-        'Avoid chilled beverages and processed sugars',
-        'Avoid strenuous lifting and late-night exhaustion',
-      ]
-    );
-    const nextWeek = addCalendarDays(todayStr, 7);
-    setFollowUpDate(apt.prescription?.followUpDate || nextWeek);
-    setDoctorNotes(apt.prescription?.doctorNotes || 'Maintain adequate hydration and monitor symptoms.');
+    setAvoidList(apt.prescription?.thingsToAvoid || []);
+    setFollowUpDate(apt.prescription?.followUpDate || '');
+    setDoctorNotes(apt.prescription?.doctorNotes || '');
     setMedicalCharges(apt.medicalCharges || []);
 
     // If waiting, update status to in_consultation
@@ -162,6 +186,10 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
   const handleSaveConsultation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeConsultationApt || isSavingConsultation) return;
+    if (!diagnosis.trim()) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'Enter a diagnosis before completing the consultation.' }));
+      return;
+    }
     if (activeConsultationApt.feeCollected
       && JSON.stringify(activeConsultationApt.medicalCharges || []) !== JSON.stringify(medicalCharges)) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
@@ -185,11 +213,9 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
         patientPhone: activeConsultationApt.patientPhone,
         patientEmail: activeConsultationApt.patientEmail,
         date: todayStr,
-        diagnosis: diagnosis || 'General Clinical Evaluation & Consultation',
+        diagnosis: diagnosis.trim(),
         symptoms,
-        tablets: validTablets.length > 0 ? validTablets : [
-          { name: 'Standard Medication', dosage: 'As directed', frequency: 'Once daily', duration: '5 Days', instructions: 'After meals' }
-        ],
+        tablets: validTablets,
         thingsToAvoid: avoidList,
         followUpDate: followUpDate || undefined,
         doctorNotes,
@@ -272,7 +298,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
             }`}
           >
             <Clock className="w-3.5 h-3.5 shrink-0" />
-            <span>Now / Queue ({doctorAppointments.filter((a) => (a.status === 'in_consultation' || a.status === 'waiting') && a.date === todayStr).length})</span>
+            <span>Now / Queue ({doctorAppointments.filter(isQueueAppointment).length})</span>
           </button>
 
           <button
@@ -284,7 +310,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
             }`}
           >
             <Calendar className="w-3.5 h-3.5 shrink-0" />
-            <span>Upcoming ({doctorAppointments.filter((a) => a.status === 'scheduled' || a.date > todayStr).length})</span>
+            <span>Upcoming ({doctorAppointments.filter(isUpcomingAppointment).length})</span>
           </button>
 
           <button

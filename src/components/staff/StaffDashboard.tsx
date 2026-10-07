@@ -2,13 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { User, AttendanceRecord, LeaveRequest } from '../../types';
 import { store } from '../../data/store';
 import { getHospitalDate } from '../../utils/hospitalDate';
-import { 
-  Clock, 
-  Calendar, 
-  CheckCircle2, 
-  LogOut, 
-  LogIn, 
-  ShieldCheck, 
+import {
+  Clock,
+  Calendar,
+  CheckCircle2,
+  LogOut,
+  LogIn,
+  ShieldCheck,
   Send,
   AlertCircle
 } from 'lucide-react';
@@ -78,7 +78,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
     e.preventDefault();
     if (!currentUser || !leaveStart || !leaveEnd || !leaveReason) return;
     if (leaveEnd < leaveStart) {
-      window.alert('The leave end date must be on or after the start date.');
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'The leave end date must be on or after the start date.',
+      }));
       return;
     }
 

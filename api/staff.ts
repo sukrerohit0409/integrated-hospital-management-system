@@ -11,11 +11,6 @@ type Response = {
   json(body: unknown): void;
 };
 
-const validRoles = new Set([
-  'admin', 'manager', 'doctor', 'receptionist',
-  'nurse', 'cleaner', 'ward_boy', 'other',
-]);
-
 export default async function handler(req: Request, res: Response) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -64,42 +59,33 @@ export default async function handler(req: Request, res: Response) {
   if (actor.role === 'receptionist' && body.action !== 'invitePatient') {
     return res.status(403).json({ error: 'Reception can only invite patient portal accounts.' });
   }
+  if (body.action === 'invite') {
+    return res.status(403).json({ error: 'Staff invitations are disabled.' });
+  }
 
-  if (body.action === 'invite' || body.action === 'invitePatient') {
+  if (body.action === 'invitePatient') {
     const name = typeof body.name === 'string' ? body.name.trim() : '';
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
     const isPatientInvite = body.action === 'invitePatient';
-    const role = isPatientInvite ? 'patient' : typeof body.role === 'string' ? body.role : '';
-    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone
-      || (!isPatientInvite && !validRoles.has(role))) {
-      return res.status(400).json({ error: 'Name, valid email, phone, and a permitted staff role are required.' });
+    const role = 'patient';
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone) {
+      return res.status(400).json({ error: 'Name, valid email, and phone are required.' });
     }
     if (isPatientInvite && !['admin', 'manager', 'receptionist'].includes(actor.role)) {
       return res.status(403).json({ error: 'Your hospital role cannot invite patient accounts.' });
     }
-    if (actor.role === 'manager' && ['admin', 'manager'].includes(role)) {
-      return res.status(403).json({ error: 'Managers cannot create admin or manager accounts.' });
-    }
     const details = {
       customRoleTitle: typeof body.customRoleTitle === 'string' ? body.customRoleTitle.trim() : undefined,
       department: typeof body.department === 'string' ? body.department.trim() : undefined,
+      specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
+      qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
       age: Number.isInteger(body.age) ? body.age : undefined,
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };
-    const rawPassword = typeof body.password === 'string' && body.password.trim() ? body.password.trim() : '';
-    const cleanPhone = phone.replace(/\D/g, '') || phone;
-    let initialPassword = rawPassword || (isPatientInvite ? (cleanPhone.length >= 6 ? cleanPhone : 'Patient@123') : 'Hospital@123');
-    if (initialPassword.length < 6) {
-      initialPassword = isPatientInvite ? 'Patient@123' : 'Hospital@123';
-    }
-
-    const { data, error } = await adminClient.auth.admin.createUser({
-      email,
-      password: initialPassword,
-      email_confirm: true,
-      user_metadata: { name, phone, age: details.age, gender: details.gender },
+    const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
+      data: { name, phone, age: details.age, gender: details.gender, mustSetPassword: true },
     });
     if (error || !data.user) {
       return res.status(400).json({ error: error?.message || 'Could not create the account in Supabase Auth.' });
@@ -123,7 +109,7 @@ export default async function handler(req: Request, res: Response) {
     return res.status(201).json({
       id: data.user.id,
       email,
-      message: isPatientInvite ? 'Patient account created and confirmed.' : 'Staff account created and confirmed.',
+      message: 'Patient invitation sent.',
     });
   }
 
@@ -168,7 +154,42 @@ export default async function handler(req: Request, res: Response) {
     if (actor.role === 'manager' && ['admin', 'manager'].includes(target.role)) {
       return res.status(403).json({ error: 'Managers cannot remove admin or manager accounts.' });
     }
-    await adminClient.from('profiles').delete().eq('id', id);
+    if (target.role === 'doctor') {
+      const activeAppointments: Array<{ record_id: string; payload: unknown }> = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error: appointmentsError } = await adminClient
+          .from('ihms_records')
+          .select('record_id,payload')
+          .eq('record_type', 'appointments')
+          .eq('doctor_id', id)
+          .order('record_id')
+          .range(from, from + 999);
+        if (appointmentsError) {
+          return res.status(500).json({ error: "Could not verify the doctor's appointment schedule." });
+        }
+        activeAppointments.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      const today = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+      const hasActiveAppointments = activeAppointments.some((row) => {
+        const payload = row.payload as { status?: string; date?: string } | null;
+        return Boolean(payload
+          && payload.date
+          && payload.date >= today
+          && ['scheduled', 'waiting', 'in_consultation'].includes(payload.status || ''));
+      });
+      if (hasActiveAppointments) {
+        return res.status(409).json({
+          error: 'This doctor still has active or upcoming appointments. Mark the doctor inactive instead of removing the account.',
+        });
+      }
+    }
+    // auth.users has a cascade to profiles, so remove the auth account first.
     const { error } = await adminClient.auth.admin.deleteUser(id);
     if (error) return res.status(500).json({ error: 'Could not remove the staff account.' });
     return res.status(200).json({ message: 'Staff account removed.' });

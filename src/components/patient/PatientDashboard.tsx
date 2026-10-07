@@ -2,24 +2,24 @@ import React, { useState, useMemo } from 'react';
 import { User, Appointment, Prescription } from '../../types';
 import { store } from '../../data/store';
 import { supabase } from '../../lib/supabase';
-import { 
-  Calendar, 
-  Clock, 
-  FileText, 
-  Stethoscope, 
-  CheckCircle2, 
-  AlertCircle, 
-  Printer, 
-  ChevronRight, 
-  UserCheck, 
-  CalendarCheck, 
+import {
+  Calendar,
+  Clock,
+  FileText,
+  Stethoscope,
+  CheckCircle2,
+  AlertCircle,
+  Printer,
+  ChevronRight,
+  UserCheck,
+  CalendarCheck,
   XCircle,
   Pill,
   HeartPulse,
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
-import { getHospitalDate } from '../../utils/hospitalDate';
+import { firstOpenHospitalSlot, getHospitalDate, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 
 interface PatientDashboardProps {
   currentUser: User | null;
@@ -87,6 +87,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
         }));
         return;
       }
+      window.dispatchEvent(new Event('ihms:data-success'));
       const rows: unknown = data;
       if (!Array.isArray(rows) || !rows.every(isBookedSlot)) {
         console.error('Appointment availability returned an unexpected response.');
@@ -127,16 +128,39 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
   // Available Time Slots for booking
   const TIME_SLOTS = [
-    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', 
-    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM', 
-    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM', 
+    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
+    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
+    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
     '04:30 PM', '05:00 PM'
   ];
+
 
   const handleBookAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    if (supabase && bookedSlots.includes(bookingSlot)) {
+    if (bookingDate < getHospitalDate() || isHospitalTimeSlotPast(bookingDate, bookingSlot)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Please choose today or a future date for the appointment.',
+      }));
+      return;
+    }
+
+    const samePatientTimeAlreadyBooked = appointments.some((appointment) =>
+      appointment.patientId === currentUser.id
+      && appointment.date === bookingDate
+      && appointment.timeSlot === bookingSlot
+      && appointment.status !== 'cancelled'
+    );
+
+    const sameSlotAlreadyBooked = appointments.some((appointment) =>
+      appointment.doctorId === selectedDoctorId
+      && appointment.date === bookingDate
+      && appointment.timeSlot === bookingSlot
+      && appointment.status !== 'cancelled'
+      && appointment.type !== 'walk_in'
+    );
+
+    if (samePatientTimeAlreadyBooked || (supabase && bookedSlots.includes(bookingSlot)) || sameSlotAlreadyBooked) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
         detail: 'That appointment slot has just been reserved. Choose another time.',
       }));
@@ -186,17 +210,32 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
   // Follow-up direct booking action (as requested: "they patient have access to book appointment on that date or skip follow up")
   const handleBookFollowUp = async (apt: Appointment) => {
     if (!currentUser || !apt.prescription?.followUpDate) return;
+    const followUpDate = apt.prescription.followUpDate;
+    if (followUpDate < getHospitalDate()) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'The recommended follow-up date has already passed. Ask the doctor for a new date.' }));
+      return;
+    }
 
     let followUp = appointments.find(
       (appointment) => appointment.followUpForAppointmentId === apt.id
     );
 
     if (!followUp) {
-      let timeSlot = '10:00 AM';
+      const isLocallyTaken = (slot: string) => appointments.some((existing) =>
+        existing.doctorId === apt.doctorId
+        && existing.date === followUpDate
+        && existing.timeSlot === slot
+        && existing.status !== 'cancelled'
+      );
+      let timeSlot = firstOpenHospitalSlot(TIME_SLOTS, followUpDate, isLocallyTaken) || '';
+      if (!timeSlot) {
+        window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'No appointment slots are available on the recommended follow-up date.' }));
+        return;
+      }
       if (supabase) {
         const { data, error } = await supabase.rpc('get_booked_slots', {
           p_doctor_id: apt.doctorId,
-          p_date: apt.prescription.followUpDate,
+          p_date: followUpDate,
         });
         if (error) {
           console.error('Could not load follow-up appointment availability:', error);
@@ -212,8 +251,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
           }));
           return;
         }
-        const availableSlot = TIME_SLOTS.find(
-          (slot) => !data.some((booked) => booked.time_slot === slot)
+        const availableSlot = firstOpenHospitalSlot(
+          TIME_SLOTS,
+          followUpDate,
+          (slot) => data.some((booked) => booked.time_slot === slot),
         );
         if (!availableSlot) {
           window.dispatchEvent(new CustomEvent('ihms:data-error', {
@@ -234,7 +275,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
         doctorId: apt.doctorId,
         doctorName: apt.doctorName,
         department: apt.department,
-        date: apt.prescription.followUpDate,
+        date: followUpDate,
         timeSlot,
         type: 'follow_up',
         followUpForAppointmentId: apt.id,
@@ -265,7 +306,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
       }));
       return;
     }
-    alert(`Follow-up appointment booked with ${apt.doctorName} on ${apt.prescription.followUpDate}!`);
+    alert(`Follow-up appointment booked with ${apt.doctorName} on ${followUpDate}!`);
     setActiveTab('history');
   };
 
@@ -686,6 +727,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                   {TIME_SLOTS.map((slot) => {
+                    const isPast = isHospitalTimeSlotPast(bookingDate, slot);
                     const isBooked = supabase
                       ? bookedSlots.includes(slot)
                       : appointments.some(
@@ -700,10 +742,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                       <button
                         key={slot}
                         type="button"
-                        disabled={isBooked}
+                        disabled={isBooked || isPast}
                         onClick={() => setBookingSlot(slot)}
                         className={`p-2.5 rounded-lg border text-center transition-all text-xs font-mono font-medium ${
-                          isBooked
+                          isPast
+                            ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
+                            : isBooked
                             ? 'bg-rose-50 border-rose-200 text-rose-400 cursor-not-allowed line-through'
                             : bookingSlot === slot
                             ? 'bg-teal-600 border-teal-600 text-white font-bold shadow-2xs'

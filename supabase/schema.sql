@@ -444,6 +444,12 @@ begin
         raise exception 'Patients may only update their own follow-up choice';
       end if;
     elsif actor_role = 'doctor' then
+      if not (
+        (coalesce(old.payload ->> 'status', 'scheduled'), coalesce(new.payload ->> 'status', '')) in
+          (('scheduled', 'in_consultation'), ('waiting', 'in_consultation'), ('in_consultation', 'completed'), ('in_consultation', 'in_consultation'), ('completed', 'completed'))
+      ) then
+        raise exception 'Invalid doctor appointment status transition';
+      end if;
       if old.doctor_id <> (select auth.uid())::text
         or (to_jsonb(new) - 'payload' - 'updated_at')
           <> (to_jsonb(old) - 'payload' - 'updated_at')
@@ -501,12 +507,23 @@ begin
         end if;
       end if;
     elsif actor_role = 'receptionist' then
+      if coalesce(new.payload ->> 'feeCollected', 'false') = 'true'
+        and coalesce(old.payload ->> 'status', '') <> 'completed'
+      then
+        raise exception 'Fees can only be collected after the consultation is completed';
+      end if;
+      if not (
+        (coalesce(old.payload ->> 'status', 'scheduled'), coalesce(new.payload ->> 'status', '')) in
+          (('scheduled', 'waiting'), ('waiting', 'in_consultation'), ('cancelled', 'cancelled'), ('completed', 'completed'), ('scheduled', 'scheduled'), ('waiting', 'waiting'), ('in_consultation', 'in_consultation'), ('cancelled', 'cancelled'))
+      ) then
+        raise exception 'Invalid receptionist appointment status transition';
+      end if;
       if (to_jsonb(new) - 'payload' - 'updated_at')
           <> (to_jsonb(old) - 'payload' - 'updated_at')
         or (new.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
           <> (old.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
         or coalesce(new.payload ->> 'status', '') not in (
-          'scheduled', 'waiting', 'in_consultation', 'completed', 'cancelled'
+          'scheduled', 'waiting', 'in_consultation', 'cancelled'
         )
         or coalesce(new.payload ->> 'feeCollected', '') not in ('true', 'false')
         or (
@@ -799,6 +816,60 @@ drop trigger if exists prepare_ihms_record_insert on public.ihms_records;
 create trigger prepare_ihms_record_insert
   before insert on public.ihms_records
   for each row execute procedure public.prepare_ihms_record_insert();
+
+create or replace function public.record_ihms_appointment_payment()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  revenue_id text := 'rev-' || replace(gen_random_uuid()::text, '-', '');
+begin
+  if coalesce(old.payload ->> 'feeCollected', 'false') = 'false'
+    and new.payload ->> 'feeCollected' = 'true'
+  then
+    insert into public.ihms_records (
+      record_type,
+      record_id,
+      owner_id,
+      doctor_id,
+      payload
+    )
+    values (
+      'revenue',
+      revenue_id,
+      null,
+      null,
+      jsonb_build_object(
+        'id', revenue_id,
+        'date', '',
+        'time', '',
+        'amount', coalesce(new.payload -> 'feeAmount', '650'::jsonb),
+        'category', case
+          when new.payload ->> 'type' = 'walk_in' then 'Walk-in Registration'
+          else 'Consultation Fee'
+        end,
+        'patientName', new.payload -> 'patientName',
+        'patientId', new.payload -> 'patientId',
+        'paymentMethod', new.payload -> 'paymentMethod',
+        'appointmentId', new.record_id
+      )
+    );
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists record_ihms_appointment_payment on public.ihms_records;
+create trigger record_ihms_appointment_payment
+  after update of payload on public.ihms_records
+  for each row
+  when (
+    old.record_type = 'appointments'
+    and new.record_type = 'appointments'
+  )
+  execute procedure public.record_ihms_appointment_payment();
 
 grant select, insert, update, delete on public.ihms_records to authenticated;
 grant select, insert, update on public.ihms_prescriptions to authenticated;

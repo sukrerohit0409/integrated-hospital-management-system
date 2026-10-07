@@ -5,20 +5,20 @@ import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { getUserDisplayName, getUserInitials } from '../../utils/userDisplay';
 import { addCalendarDays, getHospitalDate, getHospitalTime } from '../../utils/hospitalDate';
-import { 
-  IndianRupee, 
-  TrendingUp, 
-  TrendingDown, 
-  Users, 
-  Calendar, 
-  Clock, 
-  UserPlus, 
-  Trash2, 
-  Filter, 
-  Search, 
-  PlusCircle, 
-  CheckCircle2, 
-  AlertCircle, 
+import {
+  IndianRupee,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  Calendar,
+  Clock,
+  UserPlus,
+  Trash2,
+  Filter,
+  Search,
+  PlusCircle,
+  CheckCircle2,
+  AlertCircle,
   CreditCard,
   Building,
   ShieldCheck,
@@ -31,7 +31,7 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'revenue' | 'expense' | 'attendance' | 'staff' | 'appointments'>('overview');
-  
+
   // State from store
   const [users, setUsers] = useState<User[]>(() => store.getUsers());
   const [appointments, setAppointments] = useState<Appointment[]>(() => store.getAppointments());
@@ -64,6 +64,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
   const [newStaffRole, setNewStaffRole] = useState<UserRole>('nurse');
   const [customRoleTitle, setCustomRoleTitle] = useState('');
   const [newStaffDept, setNewStaffDept] = useState('Nursing & Emergency');
+  const [newDoctorSpecialty, setNewDoctorSpecialty] = useState('');
+  const [newDoctorQualification, setNewDoctorQualification] = useState('');
   const [newStaffAge, setNewStaffAge] = useState('28');
   const [newStaffGender, setNewStaffGender] = useState<'Male' | 'Female' | 'Other'>('Female');
   const [newStaffPassword, setNewStaffPassword] = useState('');
@@ -196,51 +198,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newStaffName || !newStaffEmail || !newStaffPhone) return;
-    const staffPassword = newStaffPassword.trim() || 'Hospital@123';
+    window.dispatchEvent(new CustomEvent('ihms:data-error', {
+      detail: 'Staff invitations are disabled. Contact the system administrator to onboard staff.',
+    }));
+  };
 
+  const handleToggleStaffStatus = async (member: User) => {
+    const nextStatus = member.status === 'active' ? 'inactive' : 'active';
     try {
       if (supabase) {
-        await manageStaffAccount({
-          action: 'invite',
-          name: newStaffName,
-          email: newStaffEmail,
-          phone: newStaffPhone,
-          role: newStaffRole,
-          customRoleTitle: newStaffRole === 'other' ? customRoleTitle : undefined,
-          department: newStaffDept,
-          age: parseInt(newStaffAge, 10) || 30,
-          gender: newStaffGender,
-          password: staffPassword,
-        });
+        await manageStaffAccount({ action: 'status', id: member.id, status: nextStatus });
       } else {
-        store.addUser({
-          name: newStaffName,
-          email: newStaffEmail,
-          phone: newStaffPhone,
-          role: newStaffRole,
-          customRoleTitle: newStaffRole === 'other' ? customRoleTitle : undefined,
-          department: newStaffDept,
-          age: parseInt(newStaffAge, 10) || 30,
-          gender: newStaffGender,
-          status: 'active',
-          password: staffPassword,
-        });
+        store.updateUser(member.id, { status: nextStatus });
       }
     } catch (error) {
-      console.error('Could not create staff account:', error);
+      console.error('Could not update staff status:', error);
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
-        detail: error instanceof Error ? error.message : 'Could not create the staff account.',
+        detail: error instanceof Error ? error.message : 'Could not update staff status.',
       }));
-      return;
     }
-
-    setShowAddStaffModal(false);
-    setNewStaffName('');
-    setNewStaffEmail('');
-    setNewStaffPhone('');
-    setNewStaffPassword('');
-    setCustomRoleTitle('');
   };
 
   const handleDeleteStaff = (id: string, name: string) => {
@@ -262,12 +238,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     e.preventDefault();
     const amt = parseFloat(expAmount);
     if (!Number.isFinite(amt) || amt <= 0 || !expDescription.trim()) {
-      const message = 'Enter a positive expense amount and a description.';
-      if (supabase) {
-        window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: message }));
-      } else {
-        window.alert(message);
-      }
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Enter a positive expense amount and a description.',
+      }));
       return;
     }
 
@@ -1038,7 +1011,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
               <div>
                 <h2 className="text-base font-bold text-slate-900">Hospital Staff Workforce & Role Management</h2>
                 <p className="text-xs text-slate-500">
-                  Full staff add/delete control with role assignment (Manager, Receptionist, Doctor, Nurse, Cleaner, Ward Boy, and Custom Roles)
+                  View and manage existing staff accounts. New staff invitations are disabled.
                 </p>
               </div>
 
@@ -1055,11 +1028,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                 </div>
 
                 <button
-                  onClick={() => setShowAddStaffModal(true)}
-                  className="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs"
+                  type="button"
+                  disabled
+                  title="Staff invitations are disabled"
+                  className="px-3.5 py-1.5 bg-slate-200 text-slate-500 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-not-allowed"
                 >
                   <UserPlus className="w-3.5 h-3.5" />
-                  <span>+ Add Hospital Staff</span>
+                  <span>Staff Invitations Disabled</span>
                 </button>
               </div>
             </div>
@@ -1110,11 +1085,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                       <p className="text-[11px]"><span className="text-slate-400">Department:</span> {member.department || 'General'}</p>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/80 text-[11px]">
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/80 text-[11px] gap-2">
                       <span className="text-slate-500">Status: <strong className="capitalize text-slate-800">{member.status}</strong></span>
-                      <span className="text-[11px] text-slate-500 font-mono">
-                        Active Personnel
-                      </span>
+                      {member.id !== currentUser.id && member.role !== 'admin' ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleStaffStatus(member)}
+                            className="px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 font-semibold"
+                          >
+                            {member.status === 'inactive' ? 'Activate' : 'Deactivate'}
+                          </button>
+                          <span className="text-[10px] text-slate-500 font-mono">Active Personnel</span>
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 font-mono">Protected account</span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1302,6 +1288,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                 </div>
               </div>
 
+              {newStaffRole === 'doctor' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Specialty</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Cardiology"
+                      value={newDoctorSpecialty}
+                      onChange={(e) => setNewDoctorSpecialty(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Qualification</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. MBBS, MD"
+                      value={newDoctorQualification}
+                      onChange={(e) => setNewDoctorQualification(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* If "other", show custom role title input */}
               {newStaffRole === 'other' && (
                 <div>
@@ -1343,21 +1354,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">
-                  Login Password (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Set initial password (default: Hospital@123)"
-                  value={newStaffPassword}
-                  onChange={(e) => setNewStaffPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Auto-confirmed in Authentication. Staff can immediately sign in with this password.
-                </p>
-              </div>
+              {!supabase && (
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Demo Login Password (Optional)</label>
+                  <input
+                    type="password"
+                    placeholder="Demo account password"
+                    value={newStaffPassword}
+                    onChange={(e) => setNewStaffPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Hosted accounts receive a password-setup invitation by email.
+                  </p>
+                </div>
+              )}
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
                 <button

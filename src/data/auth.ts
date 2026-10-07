@@ -41,6 +41,7 @@ export async function getSignedInProfile(): Promise<User | null> {
     phone: data.phone,
     role: data.role,
     isOnline: true,
+    mustSetPassword: user.user_metadata?.mustSetPassword === true,
     status: data.details.status || 'active',
     createdAt: data.created_at,
   };

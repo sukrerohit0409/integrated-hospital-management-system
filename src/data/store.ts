@@ -20,6 +20,7 @@ import {
 } from './mockData';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import './tabSession';
 import { getHospitalDate, getHospitalTime } from '../utils/hospitalDate';
 import { getUserDisplayName } from '../utils/userDisplay';
 
@@ -64,7 +65,7 @@ export function subscribe(listener: Listener) {
 // Local Storage helpers with fallback
 function getStored<T>(key: string, fallback: T): T {
   try {
-    const item = localStorage.getItem(key);
+    const item = sessionStorage.getItem(key);
     return item ? JSON.parse(item) : fallback;
   } catch (err) {
     console.error(`Error loading ${key}:`, err);
@@ -74,12 +75,21 @@ function getStored<T>(key: string, fallback: T): T {
 
 function setStored<T>(key: string, value: T): void {
   try {
-    const previous = localStorage.getItem(key);
-    localStorage.setItem(key, JSON.stringify(value));
+    const previous = sessionStorage.getItem(key);
+    sessionStorage.setItem(key, JSON.stringify(value));
     notify();
+    if (!supabase) {
+      window.dispatchEvent(new Event('ihms:data-success'));
+    }
     const dataset = SHARED_DATASETS[key];
     if (dataset && supabase && !loadingSharedData) {
-      const actorId = getStored<User | null>(STORAGE_KEYS.CURRENT_USER, null)?.id;
+      let actorId: string | null = null;
+      try {
+        const currentUser = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+        actorId = currentUser ? (JSON.parse(currentUser) as User | null)?.id ?? null : null;
+      } catch {
+        actorId = null;
+      }
       sharedWriteQueue = sharedWriteQueue.then(() =>
         persistSharedRecords(dataset, previous, value, actorId)
       );
@@ -131,7 +141,7 @@ async function persistSharedRecords(
   dataset: string,
   previousJson: string | null,
   value: unknown,
-  actorId: string | undefined
+  actorId: string | null
 ): Promise<void> {
     const client = supabase;
     if (!client || !Array.isArray(value)) return;
@@ -224,6 +234,7 @@ async function persistSharedRecords(
           .in('record_id', removedIds);
         if (error) throw error;
       }
+      window.dispatchEvent(new Event('ihms:data-success'));
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       const message = `Unable to save ${dataset.replace('_', ' ')}: ${detail}`;
@@ -246,14 +257,23 @@ async function persistSharedRecords(
   }
 
 function saveHydratedData(key: string, value: unknown): void {
-    localStorage.setItem(key, JSON.stringify(value));
+    sessionStorage.setItem(key, JSON.stringify(value));
+}
+
+function clearCurrentUserStorage(): void {
+  try {
+    sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+  } catch (error) {
+    console.error('Error clearing current user session:', error);
+  }
 }
 
 export function clearSharedStore(): void {
   sharedDataRefresher = null;
-    for (const key of [STORAGE_KEYS.USERS, STORAGE_KEYS.CURRENT_USER, ...Object.keys(SHARED_DATASETS)]) {
-      localStorage.removeItem(key);
+    for (const key of [STORAGE_KEYS.USERS, ...Object.keys(SHARED_DATASETS)]) {
+      sessionStorage.removeItem(key);
     }
+    clearCurrentUserStorage();
     notify();
 }
 
@@ -269,16 +289,39 @@ export async function initializeSharedStore(): Promise<() => void> {
         return;
       }
 
-      const [recordsResult, profilesResult, prescriptionsResult] = await Promise.all([
-        client.from('ihms_records').select('record_type,record_id,payload'),
-        client.from('profiles').select('id,name,email,phone,role,details,created_at'),
-        client.from('ihms_prescriptions').select('appointment_id,payload'),
-      ]);
-      if (recordsResult.error) throw recordsResult.error;
-      if (profilesResult.error) throw profilesResult.error;
-      if (prescriptionsResult.error) throw prescriptionsResult.error;
+      const pageSize = 1000;
+      const fetchAllPages = async <T,>(
+        fetchPage: (from: number, to: number) => PromiseLike<{
+          data: T[] | null;
+          error: { message: string } | null;
+        }>
+      ): Promise<T[]> => {
+        const allRows: T[] = [];
+        for (let from = 0; ; from += pageSize) {
+          const { data, error } = await fetchPage(from, from + pageSize - 1);
+          if (error) throw error;
+          const page = data || [];
+          allRows.push(...page);
+          if (page.length < pageSize) return allRows;
+        }
+      };
 
-      const users: User[] = (profilesResult.data || []).map((profile) => ({
+      const [records, profiles, prescriptionRows] = await Promise.all([
+        fetchAllPages((from, to) =>
+          client.from('ihms_records').select('record_type,record_id,payload')
+            .order('record_type').order('record_id').range(from, to)
+        ),
+        fetchAllPages((from, to) =>
+          client.from('profiles').select('id,name,email,phone,role,details,created_at')
+            .order('id').range(from, to)
+        ),
+        fetchAllPages((from, to) =>
+          client.from('ihms_prescriptions').select('appointment_id,payload')
+            .order('appointment_id').range(from, to)
+        ),
+      ]);
+
+      const users: User[] = profiles.map((profile) => ({
         ...(profile.details as Partial<User>),
         id: profile.id,
         name: getUserDisplayName(profile.name, profile.email, profile.role as UserRole),
@@ -289,7 +332,6 @@ export async function initializeSharedStore(): Promise<() => void> {
         status: (profile.details as Partial<User>).status || 'active',
         createdAt: profile.created_at,
       }));
-      const rows = recordsResult.data || [];
       const datasets: Array<[string, string]> = [
         [STORAGE_KEYS.APPOINTMENTS, 'appointments'],
         [STORAGE_KEYS.ATTENDANCE, 'attendance'],
@@ -302,21 +344,21 @@ export async function initializeSharedStore(): Promise<() => void> {
       try {
         saveHydratedData(STORAGE_KEYS.USERS, users);
         for (const [key, dataset] of datasets) {
-          let records = rows
+          let datasetRecords = records
             .filter((row) => row.record_type === dataset)
             .map((row) => row.payload);
           if (dataset === 'appointments') {
-            const prescriptions = new Map(
-              (prescriptionsResult.data || []).map((row) => [row.appointment_id, row.payload])
+            const prescriptionByAppointment = new Map(
+              prescriptionRows.map((row) => [row.appointment_id, row.payload])
             );
-            records = records.map((record) => ({
+            datasetRecords = datasetRecords.map((record) => ({
               ...(record as Record<string, unknown>),
-              ...(prescriptions.has(String((record as Record<string, unknown>).id))
-                ? { prescription: prescriptions.get(String((record as Record<string, unknown>).id)) }
+              ...(prescriptionByAppointment.has(String((record as Record<string, unknown>).id))
+                ? { prescription: prescriptionByAppointment.get(String((record as Record<string, unknown>).id)) }
                 : {}),
             }));
           }
-          saveHydratedData(key, records);
+          saveHydratedData(key, datasetRecords);
         }
       } finally {
         loadingSharedData = false;
@@ -374,17 +416,18 @@ export const store = {
     if (sharedWriteErrors.length) {
       throw new Error(sharedWriteErrors.splice(0).join(' '));
     }
+    window.dispatchEvent(new Event('ihms:data-success'));
   },
 
   // Reset all to fresh mock data
   resetAll: () => {
-    localStorage.removeItem(STORAGE_KEYS.USERS);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-    localStorage.removeItem(STORAGE_KEYS.APPOINTMENTS);
-    localStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
-    localStorage.removeItem(STORAGE_KEYS.REVENUE);
-    localStorage.removeItem(STORAGE_KEYS.EXPENSES);
-    localStorage.removeItem(STORAGE_KEYS.LEAVES);
+    sessionStorage.removeItem(STORAGE_KEYS.USERS);
+    clearCurrentUserStorage();
+    sessionStorage.removeItem(STORAGE_KEYS.APPOINTMENTS);
+    sessionStorage.removeItem(STORAGE_KEYS.ATTENDANCE);
+    sessionStorage.removeItem(STORAGE_KEYS.REVENUE);
+    sessionStorage.removeItem(STORAGE_KEYS.EXPENSES);
+    sessionStorage.removeItem(STORAGE_KEYS.LEAVES);
     notify();
   },
 
@@ -392,7 +435,13 @@ export const store = {
   getUsers: (): User[] => getStored<User[]>(STORAGE_KEYS.USERS, INITIAL_USERS),
 
   getCurrentUser: (): User | null => {
-    const currentUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    let currentUser: string | null = null;
+    try {
+      currentUser = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    } catch (err) {
+      console.error('Error reading current user session:', err);
+      return null;
+    }
     if (currentUser !== null) {
       try {
         return JSON.parse(currentUser) as User | null;
@@ -401,13 +450,21 @@ export const store = {
         return null;
       }
     }
-    // Default to admin for convenience
-    const users = store.getUsers();
-    return users.find((u) => u.role === 'admin') || users[0];
+    // No saved session means this tab is logged out.
+    return null;
   },
 
   setCurrentUser: (user: User | null) => {
-    setStored(STORAGE_KEYS.CURRENT_USER, user);
+    try {
+      if (user) {
+        sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+      } else {
+        sessionStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      }
+      notify();
+    } catch (err) {
+      console.error('Error saving current user session:', err);
+    }
   },
 
   addUser: (userData: Omit<User, 'id' | 'createdAt' | 'isOnline'>): User => {
@@ -433,7 +490,7 @@ export const store = {
     // If updating currently logged in user
     const current = store.getCurrentUser();
     if (current && current.id === id) {
-      setStored(STORAGE_KEYS.CURRENT_USER, { ...current, ...updates });
+      store.setCurrentUser({ ...current, ...updates });
     }
   },
 
@@ -451,7 +508,7 @@ export const store = {
       setStored(STORAGE_KEYS.USERS, users);
       const current = store.getCurrentUser();
       if (current && current.id === userId) {
-        setStored(STORAGE_KEYS.CURRENT_USER, { ...current, password: newPassword });
+        store.setCurrentUser({ ...current, password: newPassword });
       }
       return true;
     }
@@ -489,7 +546,8 @@ export const store = {
   collectFee: (
     id: string,
     paymentMethod: 'Cash' | 'Card' | 'UPI',
-    collectedBy: string
+    collectedBy: string,
+    billReviewed = false
   ) => {
     const appointments = store.getAppointments();
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
@@ -497,7 +555,12 @@ export const store = {
     const timeStr = getHospitalTime();
 
     const targetApt = appointments.find((a) => a.id === id);
-    if (!targetApt) return;
+    if (
+      !targetApt
+      || targetApt.feeCollected
+      || targetApt.status !== 'completed'
+      || (targetApt.billingApproved === false && !billReviewed)
+    ) return false;
 
     const collectedApt: Appointment = {
       ...targetApt,
@@ -511,19 +574,22 @@ export const store = {
     setStored(STORAGE_KEYS.APPOINTMENTS, updated);
 
     // Automatically record revenue entry so it reflects to Admin & Manager in real-time
-    const revenueItem: RevenueItem = {
-      id: `rev-${Date.now().toString(36)}`,
-      date: dateStr,
-      time: timeStr,
-      amount: collectedApt.feeAmount || 650,
-      category: (collectedApt.type === 'walk_in' ? 'Walk-in Registration' : 'Consultation Fee') as RevenueItem['category'],
-      patientName: collectedApt.patientName,
-      patientId: collectedApt.patientId,
-      paymentMethod,
-      collectedBy,
-      appointmentId: collectedApt.id,
-    };
-    store.addRevenue(revenueItem);
+    if (!supabase) {
+      const revenueItem: RevenueItem = {
+        id: createRecordId('rev'),
+        date: dateStr,
+        time: timeStr,
+        amount: collectedApt.feeAmount || 650,
+        category: collectedApt.type === 'walk_in' ? 'Walk-in Registration' : 'Consultation Fee',
+        patientName: collectedApt.patientName,
+        patientId: collectedApt.patientId,
+        paymentMethod,
+        collectedBy,
+        appointmentId: collectedApt.id,
+      };
+      store.addRevenue(revenueItem);
+    }
+    return true;
   },
 
   savePrescription: (

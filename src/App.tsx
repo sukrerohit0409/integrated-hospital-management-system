@@ -25,6 +25,7 @@ export default function App() {
   const [dataError, setDataError] = useState('');
   const stopSharedSync = useRef<(() => void) | null>(null);
   const sessionLoadId = useRef(0);
+  const activeUserIdRef = useRef<string | null>(null);
 
   // Sync state if store changes externally
   useEffect(() => {
@@ -45,6 +46,8 @@ export default function App() {
             return;
           }
           store.setCurrentUser(user);
+          setIsChangePasswordModalOpen(Boolean(user.mustSetPassword));
+          activeUserIdRef.current = user.id;
           const stopSync = await initializeSharedStore();
           if (!active || loadId !== sessionLoadId.current) {
             stopSync();
@@ -65,32 +68,31 @@ export default function App() {
         }
       };
       void restoreSession();
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') return;
         window.setTimeout(() => {
           if (!session) {
             sessionLoadId.current += 1;
+            activeUserIdRef.current = null;
             stopSharedSync.current?.();
             stopSharedSync.current = null;
             clearSharedStore();
             if (active) {
               setCurrentUser(null);
+              setIsChangePasswordModalOpen(false);
               setIsLoadingSharedData(false);
             }
-          } else {
+            return;
+          }
+          if (event === 'SIGNED_IN' && session.user.id !== activeUserIdRef.current) {
             void restoreSession();
           }
         }, 0);
       });
-      const onDataError = (event: Event) => {
-        const detail = (event as CustomEvent<string>).detail;
-        setDataError(detail);
-      };
-      window.addEventListener('ihms:data-error', onDataError);
       return () => {
         active = false;
         sessionLoadId.current += 1;
         subscription.unsubscribe();
-        window.removeEventListener('ihms:data-error', onDataError);
         stopSharedSync.current?.();
       };
     }
@@ -98,6 +100,21 @@ export default function App() {
     return store.subscribe ? store.subscribe(() => {
       setCurrentUser(store.getCurrentUser());
     }) : undefined;
+  }, []);
+
+  useEffect(() => {
+    const onDataError = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      setDataError(detail);
+    };
+    const onDataSuccess = () => setDataError('');
+
+    window.addEventListener('ihms:data-error', onDataError);
+    window.addEventListener('ihms:data-success', onDataSuccess);
+    return () => {
+      window.removeEventListener('ihms:data-error', onDataError);
+      window.removeEventListener('ihms:data-success', onDataSuccess);
+    };
   }, []);
 
   const handleLogout = async () => {
@@ -108,13 +125,17 @@ export default function App() {
         return;
       }
     }
+    activeUserIdRef.current = null;
     store.setCurrentUser(null);
     setCurrentUser(null);
+    setIsChangePasswordModalOpen(false);
     setIsLoginModalOpen(true);
   };
 
   const handleLoginSuccess = async (user: User) => {
+    activeUserIdRef.current = user.id;
     store.setCurrentUser(user);
+    setIsChangePasswordModalOpen(Boolean(user.mustSetPassword));
     if (supabase) {
       const loadId = ++sessionLoadId.current;
       setIsLoadingSharedData(true);
@@ -141,6 +162,13 @@ export default function App() {
     }
   };
 
+  const handlePasswordUpdated = () => {
+    if (!currentUser) return;
+    const updatedUser = { ...currentUser, mustSetPassword: false };
+    store.setCurrentUser(updatedUser);
+    setCurrentUser(updatedUser);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       {/* Top Navbar */}
@@ -161,6 +189,13 @@ export default function App() {
         {isLoadingSharedData ? (
           <div className="py-16 text-center text-sm text-slate-600" role="status">
             Loading your secure hospital workspace…
+          </div>
+        ) : currentUser?.mustSetPassword ? (
+          <div className="py-16 text-center max-w-xl mx-auto space-y-4">
+            <h2 className="text-2xl font-bold text-slate-900">Set up your password</h2>
+            <p className="text-sm text-slate-600">
+              Use the invitation link to choose a private password before entering the hospital workspace.
+            </p>
           </div>
         ) : currentUser ? (
           <>
@@ -234,9 +269,12 @@ export default function App() {
 
       {/* Change Password Modal */}
       <ChangePasswordModal
-        isOpen={isChangePasswordModalOpen}
-        onClose={() => setIsChangePasswordModalOpen(false)}
+        isOpen={isChangePasswordModalOpen || Boolean(currentUser?.mustSetPassword)}
+        onClose={() => {
+          if (!currentUser?.mustSetPassword) setIsChangePasswordModalOpen(false);
+        }}
         currentUser={currentUser}
+        onPasswordUpdated={handlePasswordUpdated}
       />
     </div>
   );

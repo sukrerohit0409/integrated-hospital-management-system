@@ -1,21 +1,21 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, RevenueItem } from '../../types';
 import { store } from '../../data/store';
-import { getHospitalDate, getHospitalTime } from '../../utils/hospitalDate';
+import { getHospitalDate, getHospitalTime, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
-import { 
-  Users, 
-  CalendarClock, 
-  ReceiptText, 
-  UserPlus, 
-  CheckCircle2, 
-  Clock, 
-  ArrowRight, 
-  Phone, 
-  Printer, 
-  CreditCard, 
-  Smartphone, 
+import {
+  Users,
+  CalendarClock,
+  ReceiptText,
+  UserPlus,
+  CheckCircle2,
+  Clock,
+  ArrowRight,
+  Phone,
+  Printer,
+  CreditCard,
+  Smartphone,
   Wallet,
   Search,
   CheckCircle,
@@ -46,12 +46,18 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   const [walkinGender, setWalkinGender] = useState<'Male' | 'Female' | 'Other'>('Male');
   const [walkinReason, setWalkinReason] = useState('');
   const [walkinDoctorId, setWalkinDoctorId] = useState('');
-  const [createProfileAllowed, setCreateProfileAllowed] = useState(!supabase);
+  const [createProfileAllowed, setCreateProfileAllowed] = useState(Boolean(supabase));
   const [walkinSuccessMsg, setWalkinSuccessMsg] = useState('');
 
   // Slot Checker State
   const [slotDoctorId, setSlotDoctorId] = useState('');
   const [slotDate, setSlotDate] = useState(() => getHospitalDate());
+  const [quickBookingSlot, setQuickBookingSlot] = useState<string | null>(null);
+  const [quickBookingName, setQuickBookingName] = useState('');
+  const [quickBookingPhone, setQuickBookingPhone] = useState('');
+  const [quickBookingEmail, setQuickBookingEmail] = useState('');
+  const [quickBookingSuccess, setQuickBookingSuccess] = useState('');
+  const [isQuickBookingSaving, setIsQuickBookingSaving] = useState(false);
 
   React.useEffect(() => {
     return store.subscribe ? store.subscribe(() => {
@@ -90,6 +96,11 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   const todayTotalCollected = todayRevenue.reduce((acc, cur) => acc + cur.amount, 0);
   const requiresBillReview = Boolean(selectedAptForFee
     && (selectedAptForFee.billingApproved === false || selectedAptForFee.medicalCharges?.length));
+  const normalizedQuickBookingPhone = quickBookingPhone.replace(/\D/g, '');
+  const quickBookingExistingPatient = users.find((user) =>
+    user.role === 'patient'
+    && user.phone.replace(/\D/g, '') === normalizedQuickBookingPhone
+  );
 
   const todayCollectionByMode = useMemo(() => {
     const res = { Cash: 0, Card: 0, UPI: 0 };
@@ -140,11 +151,16 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       return;
     }
 
-    store.collectFee(
+    const collected = store.collectFee(
       selectedAptForFee.id,
       paymentMode,
-      currentUser.name
+      currentUser.name,
+      billReviewed
     );
+    if (collected === false) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'Only a completed unpaid appointment can be collected.' }));
+      return;
+    }
 
     try {
       await store.flushPendingWrites();
@@ -166,6 +182,12 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
     const effectiveEmail = walkinEmail.trim();
 
     if (createProfileAllowed) {
+      if (supabase && !effectiveEmail) {
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: "Enter the patient's email address to send a secure portal invitation.",
+        }));
+        return;
+      }
       const existingUser = users.find(
         (u) =>
           u.role === 'patient' && (
@@ -177,19 +199,15 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       if (existingUser) {
         patientId = existingUser.id;
       } else if (supabase) {
-        const cleanPhone = walkinPhone.replace(/\D/g, '') || walkinPhone.trim();
-        const patientEmail = effectiveEmail || `patient_${cleanPhone}@hospital.local`;
-        const patientPassword = cleanPhone.length >= 6 ? cleanPhone : 'Patient@123';
         try {
           const invitedId = await manageStaffAccount({
             action: 'invitePatient',
             name: walkinName.trim(),
-            email: patientEmail,
+            email: effectiveEmail,
             phone: walkinPhone.trim(),
             role: 'patient',
             age: parseInt(walkinAge, 10) || 30,
             gender: walkinGender,
-            password: patientPassword,
           });
           if (!invitedId) throw new Error('Patient account creation did not return an account id.');
           patientId = invitedId;
@@ -201,20 +219,10 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
           return;
         }
       } else {
-        const cleanPhone = walkinPhone.replace(/\D/g, '') || walkinPhone.trim();
-        const patientEmail = effectiveEmail || `patient_${cleanPhone}@hospital.local`;
-        const newUser = store.addUser({
-          name: walkinName.trim(),
-          email: patientEmail,
-          phone: walkinPhone.trim(),
-          role: 'patient',
-          age: parseInt(walkinAge) || 30,
-          gender: walkinGender,
-          department: 'Walk-in OPD',
-          status: 'active',
-          password: cleanPhone.length >= 6 ? cleanPhone : 'Patient@123',
-        });
-        patientId = newUser.id;
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: 'Patient portal accounts require Supabase email verification. The walk-in visit can be registered without creating a portal account.',
+        }));
+        return;
       }
     }
 
@@ -278,18 +286,42 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
   // Standard Available Slots
   const ALL_SLOTS = [
-    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', 
-    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM', 
-    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM', 
+    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
+    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
+    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
     '04:30 PM', '05:00 PM'
   ];
 
   // Book from slot checker
-  const handleQuickSlotBook = async (slot: string) => {
-    const patientName = prompt('Enter Patient Full Name for slot confirmation:');
-    if (!patientName) return;
-    const patientPhone = prompt('Enter Patient Phone Number:') || '9900112233';
+  const handleQuickSlotBook = (slot: string) => {
+    if (isHospitalTimeSlotPast(slotDate, slot)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'That time slot has already passed. Choose a future slot.' }));
+      return;
+    }
+    setQuickBookingName('');
+    setQuickBookingPhone('');
+    setQuickBookingEmail('');
+    setQuickBookingSuccess('');
+    setQuickBookingSlot(slot);
+  };
 
+  const handleConfirmQuickSlotBook = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!quickBookingSlot || isQuickBookingSaving) return;
+    const patientName = quickBookingName.trim();
+    const patientPhone = quickBookingPhone.trim();
+    if (!patientName || !patientPhone) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Enter the patient name and phone number to confirm this slot.',
+      }));
+      return;
+    }
+    if (isHospitalTimeSlotPast(slotDate, quickBookingSlot)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'That time slot has already passed. Choose a future slot.',
+      }));
+      return;
+    }
     const selectedDoc = doctors.find((d) => d.id === slotDoctorId) || doctors[0];
     if (!selectedDoc) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
@@ -298,33 +330,95 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       return;
     }
 
-    store.addAppointment({
-      patientId: `pat-slot-${Date.now().toString(36)}`,
-      patientName,
-      patientPhone,
-      patientEmail: `${patientPhone}@pulsecare.patient`,
-      doctorId: selectedDoc.id,
-      doctorName: selectedDoc.name,
-      department: selectedDoc.department || 'General Medicine',
-      date: slotDate,
-      timeSlot: slot,
-      type: 'online_booking',
-      status: 'scheduled',
-      reasonForVisit: 'Confirmed appointment through Receptionist Slot Checker',
-      feeCollected: false,
-      feeAmount: 650,
-    });
+    const latestAppointments = store.getAppointments();
+    const sameSlotAlreadyBooked = latestAppointments.some((appointment) =>
+      appointment.doctorId === selectedDoc.id
+      && appointment.date === slotDate
+      && appointment.timeSlot === quickBookingSlot
+      && appointment.status !== 'cancelled'
+    );
+    if (sameSlotAlreadyBooked) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'That slot is already booked. Refresh the slot list and choose another time.',
+      }));
+      return;
+    }
 
+    const existingPatient = users.find((user) =>
+      user.role === 'patient'
+      && user.phone.replace(/\D/g, '') === normalizedQuickBookingPhone
+    );
+
+    let patientId = existingPatient?.id || '';
+    let patientEmail = existingPatient?.email || '';
+    let createdPortalAccount = false;
+
+    setIsQuickBookingSaving(true);
     try {
+      if (!existingPatient) {
+        if (supabase) {
+          patientEmail = quickBookingEmail.trim().toLowerCase();
+          if (!patientEmail) {
+            window.dispatchEvent(new CustomEvent('ihms:data-error', {
+              detail: 'A new patient needs an email address for the portal account.',
+            }));
+            return;
+          }
+          patientId = await manageStaffAccount({
+            action: 'invitePatient',
+            name: patientName,
+            email: patientEmail,
+            phone: patientPhone,
+            role: 'patient',
+            age: 30,
+            gender: 'Other',
+          }) || '';
+          createdPortalAccount = Boolean(patientId);
+          if (!patientId) {
+            window.dispatchEvent(new CustomEvent('ihms:data-error', {
+              detail: 'The patient account was not created, so the appointment was not booked.',
+            }));
+            return;
+          }
+        } else {
+          patientId = `walkin-${Date.now().toString(36)}`;
+          patientEmail = '';
+        }
+      }
+
+      store.addAppointment({
+        patientId,
+        patientName: existingPatient?.name || patientName,
+        patientPhone: existingPatient?.phone || patientPhone,
+        patientEmail,
+        doctorId: selectedDoc.id,
+        doctorName: selectedDoc.name,
+        department: selectedDoc.department || 'General Medicine',
+        date: slotDate,
+        timeSlot: quickBookingSlot,
+        type: 'online_booking',
+        status: 'scheduled',
+        reasonForVisit: 'Confirmed appointment through Receptionist Slot Checker',
+        feeCollected: false,
+        feeAmount: 650,
+      });
+
       await store.flushPendingWrites();
+      window.dispatchEvent(new Event('ihms:data-success'));
+      setQuickBookingSuccess(
+        `Slot ${quickBookingSlot} successfully confirmed for ${patientName} on ${slotDate}.${createdPortalAccount ? ' A portal invitation was emailed to the patient.' : ''}`
+      );
+      setQuickBookingName('');
+      setQuickBookingPhone('');
+      setQuickBookingEmail('');
     } catch (error) {
       console.error('Slot booking did not reach the shared database:', error);
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
         detail: error instanceof Error ? error.message : 'Slot booking could not be saved.',
       }));
-      return;
+    } finally {
+      setIsQuickBookingSaving(false);
     }
-    alert(`Slot ${slot} successfully confirmed for ${patientName} on ${slotDate}!`);
   };
 
   return (
@@ -341,7 +435,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Coordinate doctor-patient queues, register walk-in patients with IHMS accounts, collect fees, and inspect today's collection.
+            Coordinate queues, register walk-in visits, collect fees, and optionally send verified patient portal invitations.
           </p>
         </div>
 
@@ -533,12 +627,16 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                                   {charge.name}: ₹{charge.amount}
                                 </span>
                               ))}
-                              <button
-                                onClick={() => handleOpenFeeModal(apt)}
-                                className="mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors"
-                              >
-                                Collect ₹{apt.feeAmount}
-                              </button>
+                              {apt.status === 'completed' ? (
+                                <button
+                                  onClick={() => handleOpenFeeModal(apt)}
+                                  className="mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-[10px] font-semibold transition-colors"
+                                >
+                                  Collect ₹{apt.feeAmount}
+                                </button>
+                              ) : (
+                                <span className="block mt-1 text-[10px] text-slate-400">Collect after consultation</span>
+                              )}
                             </div>
                           )}
                         </td>
@@ -562,12 +660,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                               </button>
                             )}
                             {apt.status === 'in_consultation' && (
-                              <button
-                                onClick={() => handleUpdateStatus(apt.id, 'completed')}
-                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-medium transition-colors"
-                              >
-                                Complete Visit
-                              </button>
+                              <span className="text-slate-500 text-[11px]">With Doctor</span>
                             )}
                             {apt.status === 'completed' && (
                               <span className="text-slate-400 text-[11px]">Visit Completed</span>
@@ -610,7 +703,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {appointments
-                    .filter((a) => !a.feeCollected)
+                    .filter((a) => a.status === 'completed' && !a.feeCollected)
                     .map((apt) => (
                       <tr key={apt.id} className="hover:bg-slate-50/70">
                         <td className="py-2.5 px-4 font-mono font-bold text-teal-800">{apt.tokenNumber}</td>
@@ -631,7 +724,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                         </td>
                       </tr>
                     ))}
-                  {appointments.filter((a) => !a.feeCollected).length === 0 && (
+                  {appointments.filter((a) => a.status === 'completed' && !a.feeCollected).length === 0 && (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-400">
                         All patient consultation fees are up to date! No pending bills.
@@ -877,8 +970,8 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                 </select>
               </div>
 
-              {/* Patient Permission for Profile Creation (Specific user requirement) */}
-              <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-xl space-y-1.5">
+              {supabase ? (
+                <div className="p-3.5 bg-teal-50 border border-teal-200 rounded-xl space-y-1.5">
                 <label className="flex items-start gap-2.5 cursor-pointer">
                   <input
                     type="checkbox"
@@ -891,11 +984,16 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                       Send the patient a secure IHMS portal invitation?
                     </span>
                     <p className="text-[11px] text-teal-800 mt-0.5">
-                      If accepted: send an account invitation to the patient's email. They set their own password before accessing records.
+                      The patient must accept the email invitation and set a password before accessing the portal.
                     </p>
                   </div>
                 </label>
-              </div>
+                </div>
+              ) : (
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900">
+                  Email-verified portal accounts are unavailable in demo mode. You can register the walk-in visit without creating a portal account.
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -938,6 +1036,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
                 <input
                   type="date"
+                  min={todayStr}
                   value={slotDate}
                   onChange={(e) => setSlotDate(e.target.value)}
                   className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
@@ -961,21 +1060,25 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                       a.status !== 'cancelled'
                   );
 
+                  const isPast = isHospitalTimeSlotPast(slotDate, slot);
+
                   return (
                     <div
                       key={slot}
                       className={`p-3 rounded-xl border text-center text-xs transition-all ${
-                        isBooked
+                        isPast
+                          ? 'bg-slate-50 border-slate-200 text-slate-400'
+                          : isBooked
                           ? 'bg-rose-50/60 border-rose-200 text-rose-800'
                           : 'bg-emerald-50/50 border-emerald-200 text-emerald-900 hover:border-emerald-500'
                       }`}
                     >
                       <span className="font-mono font-bold block">{slot}</span>
                       <span className="text-[10px] mt-1 block font-semibold uppercase">
-                        {isBooked ? 'Booked' : 'Available'}
+                        {isPast ? 'Past' : isBooked ? 'Booked' : 'Available'}
                       </span>
 
-                      {!isBooked && (
+                      {!isBooked && !isPast && (
                         <button
                           onClick={() => handleQuickSlotBook(slot)}
                           className="mt-2 w-full py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-semibold transition-colors"
@@ -988,6 +1091,112 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
                 })}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {quickBookingSlot && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quick-slot-booking-title"
+            className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden"
+          >
+            <div className="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div>
+                <h3 id="quick-slot-booking-title" className="text-sm font-bold text-slate-900">
+                  Confirm Appointment Slot
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {quickBookingSlot} · {slotDate}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close slot booking"
+                onClick={() => setQuickBookingSlot(null)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-semibold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {quickBookingSuccess ? (
+              <div className="p-5 space-y-4">
+                <p role="status" className="text-sm text-emerald-800">{quickBookingSuccess}</p>
+                <button
+                  type="button"
+                  onClick={() => setQuickBookingSlot(null)}
+                  className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleConfirmQuickSlotBook} className="p-5 space-y-4 text-xs">
+                <div>
+                  <label htmlFor="quick-booking-patient-name" className="block text-slate-700 font-semibold mb-1">
+                    Patient Full Name *
+                  </label>
+                  <input
+                    id="quick-booking-patient-name"
+                    type="text"
+                    autoComplete="name"
+                    required
+                    value={quickBookingName}
+                    onChange={(event) => setQuickBookingName(event.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="quick-booking-patient-phone" className="block text-slate-700 font-semibold mb-1">
+                    Patient Phone Number *
+                  </label>
+                  <input
+                    id="quick-booking-patient-phone"
+                    type="tel"
+                    autoComplete="tel"
+                    required
+                    value={quickBookingPhone}
+                    onChange={(event) => setQuickBookingPhone(event.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                  />
+                </div>
+                {supabase && !quickBookingExistingPatient && (
+                  <div>
+                    <label htmlFor="quick-booking-patient-email" className="block text-slate-700 font-semibold mb-1">
+                      Patient Email Address *
+                    </label>
+                    <input
+                      id="quick-booking-patient-email"
+                      type="email"
+                      autoComplete="email"
+                      required
+                      value={quickBookingEmail}
+                      onChange={(event) => setQuickBookingEmail(event.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                    />
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setQuickBookingSlot(null)}
+                    className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isQuickBookingSaving}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold rounded-lg"
+                  >
+                    {isQuickBookingSaving ? 'Booking…' : 'Confirm Booking'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

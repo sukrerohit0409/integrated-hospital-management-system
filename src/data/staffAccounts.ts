@@ -9,9 +9,10 @@ export type StaffAccountInput = {
   role: string;
   customRoleTitle?: string;
   department?: string;
+  specialty?: string;
+  qualification?: string;
   age?: number;
   gender?: string;
-  password?: string;
 };
 
 export async function manageStaffAccount(
@@ -46,5 +47,6 @@ export async function manageStaffAccount(
   if (!response.ok) {
     throw new Error(getAuthErrorMessage(result.error || `Staff account request failed (HTTP ${response.status}).`));
   }
+  window.dispatchEvent(new Event('ihms:data-success'));
   return result.id;
 }

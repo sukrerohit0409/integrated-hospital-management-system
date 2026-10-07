@@ -26,6 +26,9 @@ npm-debug.log*
 # Vercel project metadata
 .vercel/
 
+# Stale duplicate of this application
+/integrated-hospital-management-system-main/
+
 # Editor directories and files
 .vscode/
 .idea/

@@ -1,14 +1,14 @@
 import React from 'react';
 import { User, UserRole } from '../types';
-import { 
-  Building2, 
-  UserCheck, 
-  LogOut, 
-  KeyRound, 
-  Users, 
-  Stethoscope, 
-  CalendarClock, 
-  HeartHandshake, 
+import {
+  Building2,
+  UserCheck,
+  LogOut,
+  KeyRound,
+  Users,
+  Stethoscope,
+  CalendarClock,
+  HeartHandshake,
   ShieldCheck,
   ChevronDown
 } from 'lucide-react';
@@ -154,7 +154,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 )}
 
                 {roleMenuOpen && (
-                  <div 
+                  <div
                     className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 z-50 text-xs animate-in fade-in zoom-in-95 duration-100"
                     onClick={() => setRoleMenuOpen(false)}
                   >

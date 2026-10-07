@@ -3,7 +3,7 @@
  */
 export default async function handler(req: any, res: any) {
   const method = req.method || 'GET';
-  
+
   if (method === 'GET') {
     const data = {
       hospitalName: 'PulseCare Integrated Hospital',
