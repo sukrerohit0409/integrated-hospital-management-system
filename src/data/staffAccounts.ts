@@ -13,6 +13,7 @@ export type StaffAccountInput = {
   qualification?: string;
   age?: number;
   gender?: string;
+  password?: string;
 };
 
 export async function manageStaffAccount(

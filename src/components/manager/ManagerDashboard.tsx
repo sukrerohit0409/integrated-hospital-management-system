@@ -77,9 +77,57 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    window.dispatchEvent(new CustomEvent('ihms:data-error', {
-      detail: 'Staff invitations are disabled. Contact the system administrator to onboard staff.',
-    }));
+    if (!name || !email || !phone) return;
+    const initialPassword = staffPassword.trim() || 'Hospital@123';
+    if (supabase && initialPassword.length < 8) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Set an initial staff password with at least 8 characters.',
+      }));
+      return;
+    }
+
+    try {
+      if (supabase) {
+        await manageStaffAccount({
+          action: 'invite',
+          name,
+          email,
+          phone,
+          role,
+          customRoleTitle: role === 'other' ? customRoleTitle : undefined,
+          department,
+          age: parseInt(age, 10) || 30,
+          gender,
+          password: initialPassword,
+        });
+      } else {
+        store.addUser({
+          name,
+          email,
+          phone,
+          role,
+          customRoleTitle: role === 'other' ? customRoleTitle : undefined,
+          department,
+          age: parseInt(age, 10) || 30,
+          gender,
+          status: 'active',
+          password: initialPassword,
+        });
+      }
+    } catch (error) {
+      console.error('Could not create staff account:', error);
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: error instanceof Error ? error.message : 'Could not create the staff account.',
+      }));
+      return;
+    }
+
+    setShowAddStaffModal(false);
+    setName('');
+    setEmail('');
+    setPhone('');
+    setStaffPassword('');
+    setCustomRoleTitle('');
   };
 
   const handleDeleteStaff = (id: string, staffName: string) => {
@@ -472,7 +520,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
               <div>
                 <h2 className="text-base font-bold text-slate-900">Workforce Management</h2>
                 <p className="text-xs text-slate-500">
-                  View and manage existing staff accounts. New staff invitations are disabled.
+                  View and manage existing staff accounts or add a new staff member.
                 </p>
               </div>
 
@@ -490,12 +538,11 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
 
                 <button
                   type="button"
-                  disabled
-                  title="Staff invitations are disabled"
-                  className="px-3.5 py-1.5 bg-slate-200 text-slate-500 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-not-allowed"
+                  onClick={() => setShowAddStaffModal(true)}
+                  className="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
                 >
                   <UserPlus className="w-3.5 h-3.5" />
-                  <span>Staff Invitations Disabled</span>
+                  <span>Add Staff</span>
                 </button>
               </div>
             </div>
@@ -747,21 +794,25 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
                 </div>
               </div>
 
-              {!supabase && (
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Demo Login Password (Optional)</label>
-                  <input
-                    type="password"
-                    placeholder="Demo account password"
-                    value={staffPassword}
-                    onChange={(e) => setStaffPassword(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
-                  />
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    Hosted accounts receive a password-setup invitation by email.
-                  </p>
-                </div>
-              )}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  {supabase ? 'Initial Login Password *' : 'Demo Login Password (Optional)'}
+                </label>
+                <input
+                  type="password"
+                  required={Boolean(supabase)}
+                  minLength={supabase ? 8 : undefined}
+                  placeholder={supabase ? 'At least 8 characters' : 'Demo account password'}
+                  value={staffPassword}
+                  onChange={(e) => setStaffPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
+                />
+              </div>
+              <p className="text-[10px] text-slate-500">
+                {supabase
+                  ? 'Staff email is confirmed automatically. Share this initial password securely with the staff member.'
+                  : 'Demo accounts use the entered password or Hospital@123 by default.'}
+              </p>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
                 <button

@@ -11,6 +11,11 @@ type Response = {
   json(body: unknown): void;
 };
 
+const validStaffRoles = new Set([
+  'admin', 'manager', 'doctor', 'receptionist',
+  'nurse', 'cleaner', 'ward_boy', 'other',
+]);
+
 export default async function handler(req: Request, res: Response) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -60,7 +65,60 @@ export default async function handler(req: Request, res: Response) {
     return res.status(403).json({ error: 'Reception can only invite patient portal accounts.' });
   }
   if (body.action === 'invite') {
-    return res.status(403).json({ error: 'Staff invitations are disabled.' });
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+    const role = typeof body.role === 'string' ? body.role : '';
+    const password = typeof body.password === 'string' ? body.password.trim() : '';
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone || !validStaffRoles.has(role)
+      || password.length < 8) {
+      return res.status(400).json({
+        error: 'Name, valid email, phone, permitted staff role, and a password of at least 8 characters are required.',
+      });
+    }
+    if (actor.role === 'manager' && ['admin', 'manager'].includes(role)) {
+      return res.status(403).json({ error: 'Managers cannot create admin or manager accounts.' });
+    }
+
+    const details = {
+      customRoleTitle: typeof body.customRoleTitle === 'string' ? body.customRoleTitle.trim() : undefined,
+      department: typeof body.department === 'string' ? body.department.trim() : undefined,
+      specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
+      qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
+      age: Number.isInteger(body.age) ? body.age : undefined,
+      gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
+      status: 'active',
+    };
+    const { data, error } = await adminClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name, phone, age: details.age, gender: details.gender },
+    });
+    if (error || !data.user) {
+      return res.status(400).json({ error: error?.message || 'Could not create the account in Supabase Auth.' });
+    }
+
+    const { error: profileError } = await adminClient
+      .from('profiles')
+      .upsert({
+        id: data.user.id,
+        name,
+        email,
+        phone,
+        role,
+        details,
+      }, { onConflict: 'id' });
+    if (profileError) {
+      const { error: cleanupError } = await adminClient.auth.admin.deleteUser(data.user.id);
+      if (cleanupError) console.error('Could not clean up unassigned user:', cleanupError);
+      return res.status(500).json({ error: 'Account was not completed because the profile could not be assigned.' });
+    }
+    return res.status(201).json({
+      id: data.user.id,
+      email,
+      message: 'Staff account created and confirmed.',
+    });
   }
 
   if (body.action === 'invitePatient') {
