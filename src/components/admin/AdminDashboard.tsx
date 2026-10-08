@@ -1039,7 +1039,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                           )}
                         </td>
                         <td className="py-2.5 px-4 font-mono font-bold text-slate-900 tabular-nums">
-                          {item.hoursWorked ? `${item.hoursWorked.toFixed(1)} hrs` : 'In Progress'}
+                          {item.clockOut
+                            ? `${(item.hoursWorked ?? 0).toFixed(1)} hrs`
+                            : 'In Progress'}
                         </td>
                         <td className="py-2.5 px-4">
                           <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-emerald-100 text-emerald-800">

@@ -521,7 +521,9 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
                           )}
                         </td>
                         <td className="py-2.5 px-4 font-mono font-bold text-slate-900 tabular-nums">
-                          {item.hoursWorked ? `${item.hoursWorked.toFixed(1)} hrs` : 'In Progress'}
+                          {item.clockOut
+                            ? `${(item.hoursWorked ?? 0).toFixed(1)} hrs`
+                            : 'In Progress'}
                         </td>
                         <td className="py-2.5 px-4 text-slate-500 text-[11px] max-w-xs truncate">
                           {item.notes || 'Normal clinical shift'}
