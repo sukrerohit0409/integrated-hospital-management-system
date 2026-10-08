@@ -17,6 +17,7 @@ import {
   INITIAL_REVENUE,
   INITIAL_EXPENSES,
   INITIAL_LEAVES,
+  LOCAL_DEMO_PASSWORD,
 } from './mockData';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
@@ -41,6 +42,7 @@ let sharedWriteQueue: Promise<void> = Promise.resolve();
 let sharedDataRefresher: (() => Promise<void>) | null = null;
 let sharedChannel: RealtimeChannel | null = null;
 let sharedChannelUsers = 0;
+let realtimeFallbackTimer: number | null = null;
 const sharedWriteErrors: string[] = [];
 
 const SHARED_DATASETS: Record<string, string> = {
@@ -50,10 +52,29 @@ const SHARED_DATASETS: Record<string, string> = {
   [STORAGE_KEYS.EXPENSES]: 'expenses',
   [STORAGE_KEYS.LEAVES]: 'leaves',
 };
+const demoSharedKeys = new Set([STORAGE_KEYS.USERS, ...Object.keys(SHARED_DATASETS)]);
+const demoDataChannel = !supabase && typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('pulsecare-ihms-demo-data')
+  : null;
 
 function notify() {
   listeners.forEach((listener) => listener());
 }
+
+demoDataChannel?.addEventListener('message', (event: MessageEvent<{ key?: unknown; value?: unknown }>) => {
+  const { key, value } = event.data || {};
+  if (typeof key !== 'string' || !demoSharedKeys.has(key) || !Array.isArray(value)) return;
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+    notify();
+    window.dispatchEvent(new Event('ihms:data-success'));
+  } catch (error) {
+    console.error(`Could not apply demo data update for "${key}":`, error);
+    window.dispatchEvent(new CustomEvent('ihms:data-error', {
+      detail: 'A live demo update could not be applied in this tab.',
+    }));
+  }
+});
 
 export function subscribe(listener: Listener) {
   listeners.add(listener);
@@ -80,6 +101,9 @@ function setStored<T>(key: string, value: T): void {
     notify();
     if (!supabase) {
       window.dispatchEvent(new Event('ihms:data-success'));
+      if (demoSharedKeys.has(key)) {
+        demoDataChannel?.postMessage({ key, value });
+      }
     }
     const dataset = SHARED_DATASETS[key];
     if (dataset && supabase && !loadingSharedData) {
@@ -157,70 +181,59 @@ async function persistSharedRecords(
       const changed = next.filter((record) =>
         JSON.stringify(previousById.get(String(record.id))) !== JSON.stringify(record)
       );
-      if (dataset === 'appointments') {
-        const prescriptions = changed
-          .filter((record) =>
-            record.prescription
-            && JSON.stringify(previousById.get(String(record.id))?.prescription)
-              !== JSON.stringify(record.prescription)
-          )
-          .map((record) => ({
-            appointment_id: String(record.id),
-            patient_id: String(record.patientId),
-            doctor_id: String(record.doctorId),
-            payload: record.prescription,
-          }));
-        if (prescriptions.length) {
-          const { error } = await client.from('ihms_prescriptions').upsert(prescriptions, {
-            onConflict: 'appointment_id',
-          });
-          if (error) throw error;
-        }
-        const removedPrescriptions = changed
-          .filter((record) => !record.prescription && previousById.get(String(record.id))?.prescription)
-          .map((record) => String(record.id));
-        if (removedPrescriptions.length) {
-          const { error } = await client
-            .from('ihms_prescriptions')
-            .delete()
-            .in('appointment_id', removedPrescriptions);
-          if (error) throw error;
-        }
+      const toDatabaseRow = (record: Record<string, unknown>) => ({
+        record_type: dataset,
+        record_id: String(record.id),
+        owner_id: recordOwner(dataset, record),
+        doctor_id: dataset === 'appointments' ? String(record.doctorId || '') : null,
+        payload: dataset === 'appointments'
+          ? Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'prescription'))
+          : record,
+      });
+      const inserted = changed.filter((record) => !previousById.has(String(record.id)));
+      const updated = changed.filter((record) => previousById.has(String(record.id)));
+      if (inserted.length) {
+        const { error } = await client
+          .from('ihms_records')
+          .insert(inserted.map(toDatabaseRow));
+        if (error) throw error;
       }
-      if (changed.length) {
-        const toDatabaseRow = (record: Record<string, unknown>) => ({
-          record_type: dataset,
-          record_id: String(record.id),
-          owner_id: recordOwner(dataset, record),
-          doctor_id: dataset === 'appointments' ? String(record.doctorId || '') : null,
-          payload: dataset === 'appointments'
-            ? Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'prescription'))
-            : record,
+
+      const prescriptionChanges = dataset === 'appointments'
+        ? changed.filter((record) =>
+          JSON.stringify(previousById.get(String(record.id))?.prescription)
+            !== JSON.stringify(record.prescription)
+        )
+        : [];
+      const atomicallyUpdatedIds = new Set<string>();
+      for (const record of prescriptionChanges) {
+        const { error } = await client.rpc('save_ihms_consultation', {
+          p_record_id: String(record.id),
+          p_payload: toDatabaseRow(record).payload,
+          p_prescription_payload: record.prescription ?? null,
         });
-        const inserted = changed.filter((record) => !previousById.has(String(record.id)));
-        const updated = changed.filter((record) => previousById.has(String(record.id)));
-        if (inserted.length) {
-          const { error } = await client
+        if (error) throw error;
+        atomicallyUpdatedIds.add(String(record.id));
+      }
+
+      const independentlyUpdated = updated.filter(
+        (record) => !atomicallyUpdatedIds.has(String(record.id))
+      );
+      if (independentlyUpdated.length) {
+        await Promise.all(independentlyUpdated.map(async (record) => {
+          const { data, error } = await client
             .from('ihms_records')
-            .insert(inserted.map(toDatabaseRow));
+            .update({ payload: toDatabaseRow(record).payload })
+            .eq('record_type', dataset)
+            .eq('record_id', String(record.id))
+            .select('record_id')
+            .maybeSingle();
           if (error) throw error;
-        }
-        if (updated.length) {
-          await Promise.all(updated.map(async (record) => {
-            const { data, error } = await client
-              .from('ihms_records')
-              .update({ payload: toDatabaseRow(record).payload })
-              .eq('record_type', dataset)
-              .eq('record_id', String(record.id))
-              .select('record_id')
-              .maybeSingle();
-            if (error) throw error;
-            if (!data) {
-              throw new Error(`The ${dataset} record ${String(record.id)} no longer exists or cannot be updated.`);
-            }
-          }));
-        }
-}
+          if (!data) {
+            throw new Error(`The ${dataset} record ${String(record.id)} no longer exists or cannot be updated.`);
+          }
+        }));
+      }
 
       const nextIds = new Set(next.map((record) => String(record.id)));
       const removedIds = previous
@@ -364,48 +377,108 @@ export async function initializeSharedStore(): Promise<() => void> {
         loadingSharedData = false;
       }
       notify();
+      window.dispatchEvent(new Event('ihms:data-success'));
     };
 
-    sharedDataRefresher = refresh;
-    await refresh();
+    let refreshInProgress = false;
+    let refreshRequested = false;
+    let refreshDebounceTimer: number | null = null;
+    const refreshLatest = async () => {
+      refreshRequested = true;
+      if (refreshInProgress) return;
+      refreshInProgress = true;
+      try {
+        while (refreshRequested) {
+          refreshRequested = false;
+          await refresh();
+        }
+      } finally {
+        refreshInProgress = false;
+      }
+    };
+    const scheduleRefresh = () => {
+      if (refreshDebounceTimer !== null) {
+        window.clearTimeout(refreshDebounceTimer);
+      }
+      refreshDebounceTimer = window.setTimeout(() => {
+        refreshDebounceTimer = null;
+        void refreshLatest().catch((error: unknown) => {
+          console.error('Unable to refresh shared hospital data:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Could not refresh shared hospital data. Changes will be retried automatically.',
+          }));
+        });
+      }, 150);
+    };
+    const startFallbackRefresh = () => {
+      if (realtimeFallbackTimer !== null) return;
+      realtimeFallbackTimer = window.setInterval(() => {
+        void refreshLatest().catch((error: unknown) => {
+          console.error('Unable to refresh shared hospital data while live sync is reconnecting:', error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Live sync is unavailable and shared data could not be refreshed. Check the connection.',
+          }));
+        });
+      }, 10_000);
+    };
+    const stopFallbackRefresh = () => {
+      if (realtimeFallbackTimer === null) return;
+      window.clearInterval(realtimeFallbackTimer);
+      realtimeFallbackTimer = null;
+    };
+
+    sharedDataRefresher = refreshLatest;
     if (!sharedChannel) {
       const channel = client.channel(createRecordId('ihms-shared-records'));
       channel
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_records' }, () => {
-          void refresh().catch((error: unknown) => {
-            console.error('Unable to refresh shared hospital data:', error);
-            window.dispatchEvent(new CustomEvent('ihms:data-error', {
-              detail: 'Could not refresh shared hospital data. Reload the page and try again.',
-            }));
-          });
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_prescriptions' }, () => {
-          void refresh().catch((error: unknown) => {
-            console.error('Unable to refresh prescriptions:', error);
-            window.dispatchEvent(new CustomEvent('ihms:data-error', {
-              detail: 'Could not refresh shared prescriptions. Reload the page and try again.',
-            }));
-          });
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-          void refresh().catch((error: unknown) => console.error('Unable to refresh profiles:', error));
-        });
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_records' }, scheduleRefresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'ihms_prescriptions' }, scheduleRefresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, scheduleRefresh);
       sharedChannel = channel;
-      channel.subscribe();
+      startFallbackRefresh();
+      channel.subscribe((status, error) => {
+        if (sharedChannel !== channel) return;
+        if (status === 'SUBSCRIBED') {
+          stopFallbackRefresh();
+          window.dispatchEvent(new Event('ihms:data-success'));
+          scheduleRefresh();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          startFallbackRefresh();
+          console.error(`Supabase Realtime subscription ${status.toLowerCase()}:`, error);
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: 'Live sync is reconnecting. Shared data will refresh automatically while the connection is restored.',
+          }));
+        } else if (status === 'CLOSED') {
+          startFallbackRefresh();
+        }
+      });
     }
     sharedChannelUsers += 1;
 
     let stopped = false;
-    return () => {
+    const stopSync = () => {
       if (stopped) return;
       stopped = true;
       sharedChannelUsers -= 1;
+      if (refreshDebounceTimer !== null) {
+        window.clearTimeout(refreshDebounceTimer);
+        refreshDebounceTimer = null;
+      }
       if (sharedChannelUsers === 0 && sharedChannel) {
         const channelToRemove = sharedChannel;
         sharedChannel = null;
+        stopFallbackRefresh();
         void client.removeChannel(channelToRemove);
       }
     };
+
+    try {
+      await refreshLatest();
+      return stopSync;
+    } catch (error) {
+      stopSync();
+      throw error;
+    }
 }
 
 // Store API
@@ -475,7 +548,7 @@ export const store = {
       createdAt: getHospitalDate(),
       isOnline: false,
       status: userData.status || 'active',
-      password: userData.password || userData.email, // default password is email as requested
+      password: userData.password || LOCAL_DEMO_PASSWORD,
     };
     const updated = [...users, newUser];
     setStored(STORAGE_KEYS.USERS, updated);

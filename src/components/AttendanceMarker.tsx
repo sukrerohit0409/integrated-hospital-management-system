@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Clock, LogIn, LogOut } from 'lucide-react';
 import { store } from '../data/store';
 import { AttendanceRecord, User } from '../types';
-import { getHospitalDate } from '../utils/hospitalDate';
+import { useHospitalDate } from '../hooks/useHospitalDate';
 
 export const AttendanceMarker: React.FC<{ currentUser: User }> = ({ currentUser }) => {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => store.getAttendance());
   const [shiftNote, setShiftNote] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const today = getHospitalDate();
+  const today = useHospitalDate();
 
   useEffect(() => store.subscribe(() => {
     setAttendance(store.getAttendance());

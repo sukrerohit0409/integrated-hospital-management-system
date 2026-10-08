@@ -53,7 +53,10 @@ create policy "Staff can read the hospital directory"
   using (
     (role = 'doctor' and coalesce(details ->> 'status', 'active') <> 'inactive')
     or public.current_ihms_role() in ('admin', 'receptionist')
-    or (public.current_ihms_role() = 'manager' and role <> 'admin')
+    or (
+      public.current_ihms_role() = 'manager'
+      and role not in ('admin', 'patient')
+    )
   );
 
 create or replace function public.create_patient_profile()
@@ -146,6 +149,7 @@ alter table public.ihms_prescriptions enable row level security;
 drop policy if exists "Read prescriptions for the patient and care team" on public.ihms_prescriptions;
 drop policy if exists "Assigned doctors manage prescriptions" on public.ihms_prescriptions;
 drop policy if exists "Assigned doctors update prescriptions" on public.ihms_prescriptions;
+drop policy if exists "Assigned doctors delete prescriptions" on public.ihms_prescriptions;
 
 create policy "Read prescriptions for the patient and care team"
   on public.ihms_prescriptions for select to authenticated
@@ -154,7 +158,7 @@ create policy "Read prescriptions for the patient and care team"
     and (
       patient_id = (select auth.uid())::text
       or doctor_id = (select auth.uid())::text
-      or public.current_ihms_role() in ('admin', 'manager')
+      or public.current_ihms_role() = 'admin'
     )
   );
 
@@ -179,6 +183,13 @@ create policy "Assigned doctors update prescriptions"
     and doctor_id = (select auth.uid())::text
   )
   with check (
+    public.current_ihms_role() = 'doctor'
+    and doctor_id = (select auth.uid())::text
+  );
+
+create policy "Assigned doctors delete prescriptions"
+  on public.ihms_prescriptions for delete to authenticated
+  using (
     public.current_ihms_role() = 'doctor'
     and doctor_id = (select auth.uid())::text
   );
@@ -225,6 +236,14 @@ begin
     and a.doctor_id = new.doctor_id
     and a.owner_id = new.patient_id;
   if not found then raise exception 'Prescription must belong to the assigned patient visit'; end if;
+  if coalesce(new.payload ->> 'followUpDate', '') <> '' then
+    if new.payload ->> 'followUpDate' !~ '^\d{4}-\d{2}-\d{2}$' then
+      raise exception 'Follow-up date is invalid';
+    end if;
+    if (new.payload ->> 'followUpDate')::date < (now() at time zone 'Asia/Kolkata')::date then
+      raise exception 'Follow-up date cannot be earlier than today';
+    end if;
+  end if;
 
   new.payload := jsonb_set(new.payload, '{appointmentId}', to_jsonb(new.appointment_id), true);
   new.payload := jsonb_set(new.payload, '{doctorId}', to_jsonb(clinician.id::text), true);
@@ -299,7 +318,7 @@ create policy "Read records permitted for the signed-in role"
       when 'appointments' then
         owner_id = (select auth.uid())::text
         or doctor_id = (select auth.uid())::text
-        or public.current_ihms_role() in ('admin', 'manager', 'receptionist')
+        or public.current_ihms_role() in ('admin', 'receptionist')
       when 'attendance' then
         owner_id = (select auth.uid())::text
         or public.current_ihms_role() = 'admin'
@@ -311,9 +330,9 @@ create policy "Read records permitted for the signed-in role"
         owner_id = (select auth.uid())::text
         or public.current_ihms_role() in ('admin', 'manager')
       when 'revenue' then
-        public.current_ihms_role() in ('admin', 'manager', 'receptionist')
+        public.current_ihms_role() in ('admin', 'receptionist')
       when 'expenses' then
-        public.current_ihms_role() in ('admin', 'manager')
+        public.current_ihms_role() = 'admin'
       else false
     end
   );
@@ -345,7 +364,7 @@ create policy "Create permitted hospital records"
     case record_type
       when 'appointments' then
         (public.current_ihms_role() = 'patient' and owner_id = (select auth.uid())::text)
-        or public.current_ihms_role() in ('admin', 'manager', 'receptionist')
+        or public.current_ihms_role() in ('admin', 'receptionist')
       when 'attendance' then
         owner_id = (select auth.uid())::text
         and public.current_ihms_role() in ('doctor', 'manager', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
@@ -365,18 +384,14 @@ create policy "Update permitted hospital records"
   using (
     case record_type
       when 'appointments' then
-        public.current_ihms_role() in ('admin', 'manager', 'receptionist')
+        public.current_ihms_role() in ('admin', 'receptionist')
         or (public.current_ihms_role() = 'doctor' and doctor_id = (select auth.uid())::text)
         or (public.current_ihms_role() = 'patient' and owner_id = (select auth.uid())::text)
       when 'attendance' then
         owner_id = (select auth.uid())::text
         or public.current_ihms_role() = 'admin'
-        or (
-          public.current_ihms_role() = 'manager'
-          and coalesce(payload ->> 'role', '') <> 'admin'
-        )
       when 'leaves' then
-        (owner_id = (select auth.uid())::text and public.current_ihms_role() <> 'manager')
+        owner_id = (select auth.uid())::text
         or public.current_ihms_role() in ('admin', 'manager')
       when 'expenses' then public.current_ihms_role() = 'admin'
       else false
@@ -385,18 +400,15 @@ create policy "Update permitted hospital records"
   with check (
     case record_type
       when 'appointments' then
-        public.current_ihms_role() in ('admin', 'manager', 'receptionist')
+        public.current_ihms_role() in ('admin', 'receptionist')
         or (public.current_ihms_role() = 'doctor' and doctor_id = (select auth.uid())::text)
         or (public.current_ihms_role() = 'patient' and owner_id = (select auth.uid())::text)
       when 'attendance' then
         owner_id = (select auth.uid())::text
         or public.current_ihms_role() = 'admin'
-        or (
-          public.current_ihms_role() = 'manager'
-          and coalesce(payload ->> 'role', '') <> 'admin'
-        )
       when 'leaves' then
-        public.current_ihms_role() in ('admin', 'manager')
+        owner_id = (select auth.uid())::text
+        or public.current_ihms_role() in ('admin', 'manager')
       when 'expenses' then public.current_ihms_role() = 'admin'
       else false
     end
@@ -406,14 +418,9 @@ create policy "Delete permitted hospital records"
   on public.ihms_records for delete to authenticated
   using (
     case record_type
-      when 'appointments' then public.current_ihms_role() in ('admin', 'manager', 'receptionist')
-      when 'attendance' then
-        public.current_ihms_role() = 'admin'
-        or (
-          public.current_ihms_role() = 'manager'
-          and coalesce(payload ->> 'role', '') <> 'admin'
-        )
-      when 'leaves' then public.current_ihms_role() in ('admin', 'manager')
+      when 'appointments' then public.current_ihms_role() = 'admin'
+      when 'attendance' then public.current_ihms_role() = 'admin'
+      when 'leaves' then public.current_ihms_role() = 'admin'
       when 'expenses' then public.current_ihms_role() = 'admin'
       else false
     end
@@ -432,16 +439,9 @@ declare
   base_fee numeric := 0;
   clock_in_time timestamptz;
   clock_out_time timestamptz;
+  actor_name text;
 begin
-  if actor_role = 'admin'
-    or (
-      actor_role = 'manager'
-      and not (
-        old.record_type = 'attendance'
-        and old.owner_id = (select auth.uid())::text
-      )
-    )
-  then
+  if actor_role = 'admin' then
     new.updated_at := now();
     return new;
   end if;
@@ -473,6 +473,38 @@ begin
           (('scheduled', 'in_consultation'), ('waiting', 'in_consultation'), ('in_consultation', 'completed'), ('in_consultation', 'in_consultation'), ('completed', 'completed'))
       ) then
         raise exception 'Invalid doctor appointment status transition';
+      end if;
+      if coalesce(old.payload ->> 'status', 'scheduled') in ('scheduled', 'waiting')
+        and new.payload ->> 'status' = 'in_consultation'
+        and coalesce(old.payload ->> 'type', '') <> 'walk_in'
+      then
+        if coalesce(old.payload ->> 'date', '') !~ '^\d{4}-\d{2}-\d{2}$'
+          or coalesce(old.payload ->> 'timeSlot', '') not in (
+            '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
+            '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
+            '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
+            '04:30 PM', '05:00 PM'
+          )
+        then
+          raise exception 'Appointment date or slot is invalid';
+        end if;
+        if (
+          old.payload ->> 'date'
+        )::date > (now() at time zone 'Asia/Kolkata')::date
+          or (
+            (
+              (old.payload ->> 'date')::date
+              + make_time(
+                split_part(split_part(old.payload ->> 'timeSlot', ' ', 1), ':', 1)::integer % 12
+                  + case when split_part(old.payload ->> 'timeSlot', ' ', 2) = 'PM' then 12 else 0 end,
+                split_part(split_part(old.payload ->> 'timeSlot', ' ', 1), ':', 2)::integer,
+                0
+              )
+            ) at time zone 'Asia/Kolkata'
+          ) > now()
+        then
+          raise exception 'Consultations cannot start before the appointment time';
+        end if;
       end if;
       if old.doctor_id <> (select auth.uid())::text
         or (to_jsonb(new) - 'payload' - 'updated_at')
@@ -609,7 +641,19 @@ begin
       true
     );
   elsif old.record_type = 'leaves' then
-    raise exception 'Only hospital managers may review leave requests';
+    if actor_role <> 'manager'
+      or old.owner_id = (select auth.uid())::text
+      or old.payload ->> 'status' is distinct from 'pending'
+      or coalesce(new.payload ->> 'status', '') not in ('approved', 'rejected')
+      or (new.payload - 'status' - 'reviewedBy')
+        <> (old.payload - 'status' - 'reviewedBy')
+    then
+      raise exception 'Managers may only approve or reject pending leave requests';
+    end if;
+    select name into actor_name
+    from public.profiles
+    where id = (select auth.uid());
+    new.payload := jsonb_set(new.payload, '{reviewedBy}', to_jsonb(actor_name), true);
   else
     raise exception 'Role cannot update this record type';
   end if;
@@ -623,6 +667,69 @@ drop trigger if exists guard_ihms_record_update on public.ihms_records;
 create trigger guard_ihms_record_update
   before update on public.ihms_records
   for each row execute procedure public.guard_ihms_record_update();
+
+create or replace function public.save_ihms_consultation(
+  p_record_id text,
+  p_payload jsonb,
+  p_prescription_payload jsonb
+)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+declare
+  appointment_owner_id text;
+  appointment_doctor_id text;
+begin
+  if public.current_ihms_role() is distinct from 'doctor'
+    or jsonb_typeof(p_payload) is distinct from 'object'
+    or p_payload ->> 'id' is distinct from p_record_id
+    or (
+      p_prescription_payload is not null
+      and jsonb_typeof(p_prescription_payload) is distinct from 'object'
+    )
+  then
+    raise exception 'Invalid consultation update';
+  end if;
+
+  update public.ihms_records
+  set payload = p_payload
+  where record_type = 'appointments'
+    and record_id = p_record_id
+    and doctor_id = (select auth.uid())::text
+  returning owner_id, doctor_id
+  into appointment_owner_id, appointment_doctor_id;
+
+  if not found then
+    raise exception 'Assigned appointment was not found or cannot be updated';
+  end if;
+
+  if p_prescription_payload is null then
+    delete from public.ihms_prescriptions
+    where appointment_id = p_record_id
+      and doctor_id = appointment_doctor_id;
+  else
+    insert into public.ihms_prescriptions (
+      appointment_id,
+      patient_id,
+      doctor_id,
+      payload
+    )
+    values (
+      p_record_id,
+      appointment_owner_id,
+      appointment_doctor_id,
+      p_prescription_payload
+    )
+    on conflict (appointment_id) do update
+    set payload = excluded.payload,
+        updated_at = now();
+  end if;
+end;
+$$;
+
+revoke all on function public.save_ihms_consultation(text, jsonb, jsonb) from public, anon;
+grant execute on function public.save_ihms_consultation(text, jsonb, jsonb) to authenticated;
 
 create or replace function public.prepare_ihms_record_insert()
 returns trigger
@@ -646,7 +753,8 @@ begin
   end if;
 
   if new.record_type = 'appointments' then
-    if new.owner_id is distinct from new.payload ->> 'patientId'
+    if new.owner_id is null
+      or new.owner_id is distinct from new.payload ->> 'patientId'
       or new.doctor_id is distinct from new.payload ->> 'doctorId'
     then
       raise exception 'Appointment ownership and doctor assignment must match the record';
@@ -686,6 +794,21 @@ begin
         or new.payload ->> 'type' not in ('online_booking', 'follow_up')
       then
         raise exception 'Appointment date, slot, or type is invalid';
+      end if;
+      if (new.payload ->> 'date')::date = (now() at time zone 'Asia/Kolkata')::date
+        and (
+          (
+            (new.payload ->> 'date')::date
+            + make_time(
+              split_part(split_part(new.payload ->> 'timeSlot', ' ', 1), ':', 1)::integer % 12
+                + case when split_part(new.payload ->> 'timeSlot', ' ', 2) = 'PM' then 12 else 0 end,
+              split_part(split_part(new.payload ->> 'timeSlot', ' ', 1), ':', 2)::integer,
+              0
+            )
+          ) at time zone 'Asia/Kolkata'
+        ) <= now()
+      then
+        raise exception 'Appointment time slot has already passed';
       end if;
       new.payload := jsonb_set(new.payload, '{patientName}', to_jsonb(actor_profile.name), true);
       new.payload := jsonb_set(new.payload, '{patientEmail}', to_jsonb(actor_profile.email), true);
@@ -734,6 +857,78 @@ begin
           raise exception 'Follow-up must use the date recommended by the doctor';
         end if;
       end if;
+    elsif actor_role in ('admin', 'receptionist') then
+      if coalesce(new.payload ->> 'type', '') not in ('walk_in', 'online_booking')
+        or btrim(coalesce(new.payload ->> 'patientName', '')) = ''
+        or coalesce(new.payload ->> 'date', '') !~ '^\d{4}-\d{2}-\d{2}$'
+      then
+        raise exception 'Staff appointment details are invalid';
+      end if;
+      if (new.payload ->> 'date')::date < (now() at time zone 'Asia/Kolkata')::date then
+        raise exception 'Appointments cannot be created for a past date';
+      end if;
+      if new.payload ->> 'type' = 'walk_in' then
+        if (new.payload ->> 'date')::date <> (now() at time zone 'Asia/Kolkata')::date
+          or coalesce(new.payload ->> 'timeSlot', '') !~ '^(0[1-9]|1[0-2]):[0-5]\d [AP]M$'
+          or coalesce(new.payload ->> 'status', '') <> 'waiting'
+        then
+          raise exception 'Walk-in appointment details are invalid';
+        end if;
+        if not exists (
+          select 1 from public.profiles
+          where id::text = new.owner_id and role = 'patient'
+        ) and coalesce(new.owner_id, '') !~ '^walkin-.+' then
+          raise exception 'Walk-in appointments must belong to a patient or an identified walk-in';
+        end if;
+      else
+        if coalesce(new.payload ->> 'timeSlot', '') not in (
+          '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
+          '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
+          '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
+          '04:30 PM', '05:00 PM'
+        )
+          or coalesce(new.payload ->> 'status', '') <> 'scheduled'
+        then
+          raise exception 'Booked appointment details are invalid';
+        end if;
+        if (new.payload ->> 'date')::date = (now() at time zone 'Asia/Kolkata')::date
+          and (
+            (
+              (new.payload ->> 'date')::date
+              + make_time(
+                split_part(split_part(new.payload ->> 'timeSlot', ' ', 1), ':', 1)::integer % 12
+                  + case when split_part(new.payload ->> 'timeSlot', ' ', 2) = 'PM' then 12 else 0 end,
+                split_part(split_part(new.payload ->> 'timeSlot', ' ', 1), ':', 2)::integer,
+                0
+              )
+            ) at time zone 'Asia/Kolkata'
+          ) <= now()
+        then
+          raise exception 'Appointment time slot has already passed';
+        end if;
+        if not exists (
+          select 1 from public.profiles
+          where id::text = new.owner_id and role = 'patient'
+        ) and coalesce(new.owner_id, '') !~ '^walkin-.+' then
+          raise exception 'Booked appointments must belong to an existing patient';
+        end if;
+      end if;
+      new.payload := jsonb_set(new.payload, '{patientName}', to_jsonb(btrim(new.payload ->> 'patientName')), true);
+      if new.payload ->> 'type' = 'online_booking' then
+        select * into clinician
+        from public.profiles
+        where id::text = new.owner_id and role = 'patient';
+        if found then
+          new.payload := jsonb_set(new.payload, '{patientName}', to_jsonb(clinician.name), true);
+          new.payload := jsonb_set(new.payload, '{patientEmail}', to_jsonb(clinician.email), true);
+          new.payload := jsonb_set(new.payload, '{patientPhone}', to_jsonb(clinician.phone), true);
+        end if;
+      end if;
+      new.payload := jsonb_set(new.payload, '{feeAmount}', to_jsonb(650), true);
+      new.payload := jsonb_set(new.payload, '{feeCollected}', 'false'::jsonb, true);
+      new.payload := jsonb_set(new.payload, '{billingApproved}', 'true'::jsonb, true);
+      new.payload := jsonb_set(new.payload, '{followUpStatus}', '"pending"'::jsonb, true);
+      new.payload := new.payload - 'paymentMethod' - 'paidAt';
     elsif new.owner_id = actor_profile.id::text then
       new.payload := jsonb_set(new.payload, '{patientName}', to_jsonb(actor_profile.name), true);
     else
@@ -751,6 +946,20 @@ begin
       or new.payload ->> 'staffId' is distinct from new.owner_id
     then
       raise exception 'Staff records must belong to the signed-in staff member';
+    end if;
+    if new.record_type = 'leaves' then
+      if coalesce(new.payload ->> 'startDate', '') !~ '^\d{4}-\d{2}-\d{2}$'
+        or coalesce(new.payload ->> 'endDate', '') !~ '^\d{4}-\d{2}-\d{2}$'
+        or btrim(coalesce(new.payload ->> 'reason', '')) = ''
+      then
+        raise exception 'Leave dates and reason are required';
+      end if;
+      if (new.payload ->> 'startDate')::date < (now() at time zone 'Asia/Kolkata')::date
+        or (new.payload ->> 'endDate')::date < (new.payload ->> 'startDate')::date
+      then
+        raise exception 'Leave dates must be current or future and end on or after the start date';
+      end if;
+      new.payload := jsonb_set(new.payload, '{reason}', to_jsonb(btrim(new.payload ->> 'reason')), true);
     end if;
     new.payload := jsonb_set(new.payload, '{staffName}', to_jsonb(actor_profile.name), true);
     new.payload := jsonb_set(new.payload, '{role}', to_jsonb(actor_profile.role::text), true);
@@ -896,7 +1105,7 @@ create trigger record_ihms_appointment_payment
   execute procedure public.record_ihms_appointment_payment();
 
 grant select, insert, update, delete on public.ihms_records to authenticated;
-grant select, insert, update on public.ihms_prescriptions to authenticated;
+grant select, insert, update, delete on public.ihms_prescriptions to authenticated;
 
 do $$
 begin

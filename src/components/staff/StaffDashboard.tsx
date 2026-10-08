@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, AttendanceRecord, LeaveRequest } from '../../types';
 import { store } from '../../data/store';
-import { getHospitalDate } from '../../utils/hospitalDate';
+import { useHospitalDate } from '../../hooks/useHospitalDate';
 import {
   Clock,
   Calendar,
@@ -22,6 +22,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
   const [leaves, setLeaves] = useState<LeaveRequest[]>(() => store.getLeaves());
 
   const [shiftNote, setShiftNote] = useState('');
+  const [isAttendanceSaving, setIsAttendanceSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'attendance' | 'leave'>('attendance');
 
   // Leave application form
@@ -37,7 +38,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
     }) : undefined;
   }, []);
 
-  const todayStr = getHospitalDate();
+  const todayStr = useHospitalDate();
   const staffId = currentUser?.id || 'u-nurse-1';
 
   // "staff has access for attendance of only that user and working hour ,day tracking"
@@ -56,22 +57,50 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
   const totalWorkingDays = myAttendance.length;
   const avgShiftHours = totalWorkingDays > 0 ? (totalWorkingHours / totalWorkingDays).toFixed(1) : '0';
 
-  const handleClockIn = () => {
-    if (!currentUser) return;
-    store.clockIn(
-      currentUser.id,
-      currentUser.name,
-      currentUser.role,
-      currentUser.customRoleTitle,
-      shiftNote || 'Morning shift self-check-in'
-    );
-    setShiftNote('');
+  const reportAttendanceError = (error: unknown) => {
+    console.error('Attendance could not be saved:', error);
+    window.dispatchEvent(new CustomEvent('ihms:data-error', {
+      detail: error instanceof Error ? error.message : 'Attendance could not be saved.',
+    }));
   };
 
-  const handleClockOut = () => {
+  const handleClockIn = async () => {
     if (!currentUser) return;
-    store.clockOut(currentUser.id, shiftNote || 'Shift end clock-out');
-    setShiftNote('');
+    if (isAttendanceSaving) return;
+    setIsAttendanceSaving(true);
+    try {
+      store.clockIn(
+        currentUser.id,
+        currentUser.name,
+        currentUser.role,
+        currentUser.customRoleTitle,
+        shiftNote || 'Morning shift self-check-in'
+      );
+      await store.flushPendingWrites();
+      setShiftNote('');
+    } catch (error) {
+      reportAttendanceError(error);
+    } finally {
+      setIsAttendanceSaving(false);
+    }
+  };
+
+  const handleClockOut = async () => {
+    if (!currentUser) return;
+    if (isAttendanceSaving) return;
+    setIsAttendanceSaving(true);
+    try {
+      const updated = store.clockOut(currentUser.id, shiftNote || 'Shift end clock-out');
+      if (!updated) {
+        throw new Error('Could not clock out because there is no active shift for today.');
+      }
+      await store.flushPendingWrites();
+      setShiftNote('');
+    } catch (error) {
+      reportAttendanceError(error);
+    } finally {
+      setIsAttendanceSaving(false);
+    }
   };
 
   const handleApplyLeave = async (e: React.FormEvent) => {
@@ -222,19 +251,21 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
               <div className="flex items-center gap-2 shrink-0">
                 {!todayRecord ? (
                   <button
-                    onClick={handleClockIn}
+                    disabled={isAttendanceSaving}
+                    onClick={() => void handleClockIn()}
                     className="px-5 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs flex items-center gap-2 shadow-2xs transition-colors"
                   >
                     <LogIn className="w-4 h-4" />
-                    <span>Clock In for Duty Today</span>
+                    <span>{isAttendanceSaving ? 'Saving…' : 'Clock In for Duty Today'}</span>
                   </button>
                 ) : !todayRecord.clockOut ? (
                   <button
-                    onClick={handleClockOut}
+                    disabled={isAttendanceSaving}
+                    onClick={() => void handleClockOut()}
                     className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs flex items-center gap-2 shadow-2xs transition-colors"
                   >
                     <LogOut className="w-4 h-4" />
-                    <span>Clock Out (End Shift)</span>
+                    <span>{isAttendanceSaving ? 'Saving…' : 'Clock Out (End Shift)'}</span>
                   </button>
                 ) : (
                   <div className="flex items-center gap-1.5 text-xs text-emerald-800 font-semibold bg-emerald-50 px-3 py-2 rounded-lg border border-emerald-200">

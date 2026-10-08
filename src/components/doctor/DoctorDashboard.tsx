@@ -123,9 +123,16 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
 
   // Open Consultation
   const handleStartConsultation = (apt: Appointment) => {
-    if (apt.date > todayStr && apt.status !== 'in_consultation') {
+    if (
+      apt.status !== 'in_consultation'
+      && apt.type !== 'walk_in'
+      && (
+        apt.date > todayStr
+        || (apt.date === todayStr && !isHospitalTimeSlotPast(apt.date, apt.timeSlot))
+      )
+    ) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
-        detail: 'Future appointments cannot be started before their scheduled date.',
+        detail: 'Appointments cannot be started before their scheduled date and time.',
       }));
       return;
     }
@@ -189,6 +196,12 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     if (!activeConsultationApt || isSavingConsultation) return;
     if (!diagnosis.trim()) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', { detail: 'Enter a diagnosis before completing the consultation.' }));
+      return;
+    }
+    if (followUpDate && followUpDate < todayStr) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'Follow-up date cannot be earlier than today.',
+      }));
       return;
     }
     if (activeConsultationApt.feeCollected
@@ -754,6 +767,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
                   <input
                     type="date"
                     value={followUpDate}
+                    min={todayStr}
                     onChange={(e) => setFollowUpDate(e.target.value)}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 bg-white font-mono text-xs font-bold text-teal-800"
                   />

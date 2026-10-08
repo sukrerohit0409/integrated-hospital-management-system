@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { User, Appointment, RevenueItem } from '../../types';
 import { store } from '../../data/store';
 import { getHospitalDate, getHospitalTime, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
+import { useHospitalDate } from '../../hooks/useHospitalDate';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { AttendanceMarker } from '../AttendanceMarker';
@@ -49,6 +50,8 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   const [walkinDoctorId, setWalkinDoctorId] = useState('');
   const [createProfileAllowed, setCreateProfileAllowed] = useState(Boolean(supabase));
   const [walkinSuccessMsg, setWalkinSuccessMsg] = useState('');
+  const [isWalkInSaving, setIsWalkInSaving] = useState(false);
+  const walkInSubmitting = React.useRef(false);
 
   // Slot Checker State
   const [slotDoctorId, setSlotDoctorId] = useState('');
@@ -68,8 +71,12 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
     }) : undefined;
   }, []);
 
-  const todayStr = getHospitalDate();
+  const todayStr = useHospitalDate();
   const doctors = users.filter((u) => u.role === 'doctor' && u.status === 'active');
+
+  React.useEffect(() => {
+    setSlotDate((currentDate) => currentDate < todayStr ? todayStr : currentDate);
+  }, [todayStr]);
 
   React.useEffect(() => {
     if (doctors.length > 0) {
@@ -175,8 +182,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
   };
 
   // Walk-in submission with IHMS profile creation
-  const handleWalkInSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performWalkInSubmit = async () => {
     if (!walkinName || !walkinPhone) return;
 
     let patientId = `walkin-${Date.now().toString(36)}`;
@@ -283,6 +289,19 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
       setWalkinSuccessMsg('');
       setActiveTab('queue');
     }, 3200);
+  };
+
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!walkinName || !walkinPhone || walkInSubmitting.current) return;
+    walkInSubmitting.current = true;
+    setIsWalkInSaving(true);
+    try {
+      await performWalkInSubmit();
+    } finally {
+      walkInSubmitting.current = false;
+      setIsWalkInSaving(false);
+    }
   };
 
   // Standard Available Slots
@@ -1000,10 +1019,11 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-2"
+                disabled={isWalkInSaving}
+                className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <UserPlus className="w-4 h-4" />
-                <span>Register Walk-in Patient & Issue Token</span>
+                <span>{isWalkInSaving ? 'Registering Walk-in Patient…' : 'Register Walk-in Patient & Issue Token'}</span>
               </button>
             </form>
           </div>

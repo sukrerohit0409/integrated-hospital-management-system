@@ -4,7 +4,8 @@ import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { getUserDisplayName, getUserInitials } from '../../utils/userDisplay';
-import { addCalendarDays, getHospitalDate, getHospitalTime } from '../../utils/hospitalDate';
+import { addCalendarDays, getHospitalTime } from '../../utils/hospitalDate';
+import { useHospitalDate } from '../../hooks/useHospitalDate';
 import {
   IndianRupee,
   TrendingUp,
@@ -87,7 +88,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     }) : undefined;
   }, []);
 
-  const todayStr = getHospitalDate();
+  const todayStr = useHospitalDate();
   const weekStartStr = addCalendarDays(todayStr, -6);
 
   // Revenue filtering logic

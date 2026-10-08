@@ -3,7 +3,7 @@ import { User, AttendanceRecord, LeaveRequest, UserRole } from '../../types';
 import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
-import { getHospitalDate } from '../../utils/hospitalDate';
+import { useHospitalDate } from '../../hooks/useHospitalDate';
 import { AttendanceMarker } from '../AttendanceMarker';
 import {
   Eye,
@@ -53,7 +53,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
     }) : undefined;
   }, []);
 
-  const todayStr = getHospitalDate();
+  const todayStr = useHospitalDate();
   const staffMembers = users
     .filter((u) => u.role !== 'patient' && u.role !== 'admin')
     .sort((left, right) => Number(right.id === currentUser.id) - Number(left.id === currentUser.id));
@@ -77,7 +77,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
     });
 
     return map;
-  }, [attendance, staffMembers]);
+  }, [attendance, staffMembers, todayStr]);
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
