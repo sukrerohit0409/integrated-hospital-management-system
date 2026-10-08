@@ -20,6 +20,16 @@ export function getHospitalTime(date = new Date()): string {
   }).format(date);
 }
 
+export function getHospitalDateTime(date = new Date()): string {
+  const time = new Intl.DateTimeFormat('en-GB', {
+    timeZone: HOSPITAL_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(date);
+  return `${getHospitalDate(date)} ${time}`;
+}
+
 export function addCalendarDays(date: string, days: number): string {
   const [year, month, day] = date.split('-').map(Number);
   const value = new Date(Date.UTC(year, month - 1, day + days));

@@ -22,7 +22,7 @@ import {
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import './tabSession';
-import { getHospitalDate, getHospitalTime } from '../utils/hospitalDate';
+import { getHospitalDate, getHospitalDateTime, getHospitalTime } from '../utils/hospitalDate';
 import { getUserDisplayName } from '../utils/userDisplay';
 
 const STORAGE_KEYS = {
@@ -598,7 +598,7 @@ export const store = {
       ...apt,
       id: createRecordId('apt'),
       tokenNumber: `T-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      createdAt: getHospitalDateTime(),
       status: apt.status || 'scheduled',
       followUpStatus: 'pending',
     };
@@ -623,7 +623,7 @@ export const store = {
     billReviewed = false
   ) => {
     const appointments = store.getAppointments();
-    const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const nowStr = getHospitalDateTime();
     const dateStr = getHospitalDate();
     const timeStr = getHospitalTime();
 
@@ -814,7 +814,7 @@ export const store = {
       ...leave,
       id: createRecordId('lv'),
       status: 'pending',
-      appliedAt: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      appliedAt: getHospitalDateTime(),
     };
     setStored(STORAGE_KEYS.LEAVES, [newLeave, ...leaves]);
     return newLeave;
