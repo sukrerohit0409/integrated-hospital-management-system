@@ -4,6 +4,7 @@ import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { getHospitalDate } from '../../utils/hospitalDate';
+import { AttendanceMarker } from '../AttendanceMarker';
 import {
   Eye,
   Users,
@@ -27,6 +28,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
   const [leaves, setLeaves] = useState<LeaveRequest[]>(() => store.getLeaves());
 
   const [staffSearch, setStaffSearch] = useState('');
+  const [eyesOnStaffSearch, setEyesOnStaffSearch] = useState('');
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
 
   // New staff form
@@ -52,7 +54,9 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
   }, []);
 
   const todayStr = getHospitalDate();
-  const staffMembers = users.filter((u) => u.role !== 'patient');
+  const staffMembers = users
+    .filter((u) => u.role !== 'patient' && u.role !== 'admin')
+    .sort((left, right) => Number(right.id === currentUser.id) - Number(left.id === currentUser.id));
 
   // Staff working hours & working days calculation
   const staffStatsMap = useMemo(() => {
@@ -249,6 +253,8 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
         </div>
       </div>
 
+      <AttendanceMarker currentUser={currentUser} />
+
       {/* EYES ON ALL STAFF (Live active/inactive status and shift presence) */}
       {activeTab === 'eyes_on_staff' && (
         <div className="space-y-6">
@@ -281,20 +287,37 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
 
           {/* Eyes on All Staff Live Surveillance Grid */}
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+            <div className="flex flex-col gap-3 pb-4 border-b border-slate-100 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
                 <h2 className="text-sm font-bold text-slate-900">
                   Live Workforce Presence & Status Control
                 </h2>
               </div>
-              <p className="text-xs text-slate-500">
-                Managers have real-time oversight to toggle status and inspect active shifts
-              </p>
+              <div className="relative sm:ml-auto">
+                <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  type="search"
+                  value={eyesOnStaffSearch}
+                  onChange={(event) => setEyesOnStaffSearch(event.target.value)}
+                  placeholder="Search staff by name, email, or role..."
+                  aria-label="Search staff to monitor"
+                  className="w-full rounded-lg border border-slate-300 bg-slate-50 py-1.5 pl-8 pr-3 text-xs focus:outline-teal-600 sm:w-72"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-5">
-              {staffMembers.map((staff) => {
+              {staffMembers.filter((staff) => {
+                const search = eyesOnStaffSearch.trim().toLowerCase();
+                return !search || [
+                  staff.name,
+                  staff.email,
+                  staff.role,
+                  staff.customRoleTitle || '',
+                  staff.department || '',
+                ].some((value) => value.toLowerCase().includes(search));
+              }).map((staff) => {
                 const stat = staffStatsMap[staff.id] || { totalHours: 0, daysWorked: 0, isClockedInToday: false };
                 return (
                   <div
@@ -481,7 +504,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {attendance
-                    .filter((r) => !attendanceDate || r.date === attendanceDate)
+                    .filter((r) => r.role !== 'admin' && (!attendanceDate || r.date === attendanceDate))
                     .map((item) => (
                       <tr key={item.id} className="hover:bg-slate-50/70">
                         <td className="py-2.5 px-4 font-mono text-slate-600">{item.date}</td>

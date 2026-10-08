@@ -4,6 +4,7 @@ import { store } from '../../data/store';
 import { getHospitalDate, getHospitalTime, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
+import { AttendanceMarker } from '../AttendanceMarker';
 import {
   Users,
   CalendarClock,
@@ -498,6 +499,8 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
           </button>
         </div>
       </div>
+
+      <AttendanceMarker currentUser={currentUser} />
 
       {/* QUEUE & DOCTOR-PATIENT COORDINATION TAB */}
       {activeTab === 'queue' && (

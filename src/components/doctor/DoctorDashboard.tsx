@@ -16,6 +16,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
+import { AttendanceMarker } from '../AttendanceMarker';
 import { getHospitalDate, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 
 interface DoctorDashboardProps {
@@ -326,6 +327,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
           </button>
         </div>
       </div>
+
+      {currentUser && <AttendanceMarker currentUser={currentUser} />}
 
       {/* Appointment Cards / Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">

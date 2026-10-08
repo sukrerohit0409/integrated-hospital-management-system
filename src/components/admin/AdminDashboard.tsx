@@ -177,7 +177,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
 
   // Overall calculations
   const patientsCount = users.filter((u) => u.role === 'patient').length;
-  const staffMembers = users.filter((u) => u.role !== 'patient');
+  const staffMembers = users
+    .filter((u) => u.role !== 'patient')
+    .sort((left, right) => Number(right.id === currentUser.id) - Number(left.id === currentUser.id));
   const totalAppointmentsCount = appointments.length;
 
   // Staff Working Hours & Days Aggregation

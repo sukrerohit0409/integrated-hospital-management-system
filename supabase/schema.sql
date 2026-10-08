@@ -52,9 +52,8 @@ create policy "Staff can read the hospital directory"
   on public.profiles for select to authenticated
   using (
     (role = 'doctor' and coalesce(details ->> 'status', 'active') <> 'inactive')
-    or public.current_ihms_role() in (
-      'admin', 'manager', 'receptionist'
-    )
+    or public.current_ihms_role() in ('admin', 'receptionist')
+    or (public.current_ihms_role() = 'manager' and role <> 'admin')
   );
 
 create or replace function public.create_patient_profile()
@@ -303,7 +302,11 @@ create policy "Read records permitted for the signed-in role"
         or public.current_ihms_role() in ('admin', 'manager', 'receptionist')
       when 'attendance' then
         owner_id = (select auth.uid())::text
-        or public.current_ihms_role() in ('admin', 'manager')
+        or public.current_ihms_role() = 'admin'
+        or (
+          public.current_ihms_role() = 'manager'
+          and coalesce(payload ->> 'role', '') <> 'admin'
+        )
       when 'leaves' then
         owner_id = (select auth.uid())::text
         or public.current_ihms_role() in ('admin', 'manager')
@@ -345,7 +348,7 @@ create policy "Create permitted hospital records"
         or public.current_ihms_role() in ('admin', 'manager', 'receptionist')
       when 'attendance' then
         owner_id = (select auth.uid())::text
-        and public.current_ihms_role() in ('doctor', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
+        and public.current_ihms_role() in ('doctor', 'manager', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
       when 'leaves' then
         owner_id = (select auth.uid())::text
         and public.current_ihms_role() in ('doctor', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
@@ -367,7 +370,11 @@ create policy "Update permitted hospital records"
         or (public.current_ihms_role() = 'patient' and owner_id = (select auth.uid())::text)
       when 'attendance' then
         owner_id = (select auth.uid())::text
-        or public.current_ihms_role() in ('admin', 'manager')
+        or public.current_ihms_role() = 'admin'
+        or (
+          public.current_ihms_role() = 'manager'
+          and coalesce(payload ->> 'role', '') <> 'admin'
+        )
       when 'leaves' then
         (owner_id = (select auth.uid())::text and public.current_ihms_role() <> 'manager')
         or public.current_ihms_role() in ('admin', 'manager')
@@ -383,7 +390,11 @@ create policy "Update permitted hospital records"
         or (public.current_ihms_role() = 'patient' and owner_id = (select auth.uid())::text)
       when 'attendance' then
         owner_id = (select auth.uid())::text
-        or public.current_ihms_role() in ('admin', 'manager')
+        or public.current_ihms_role() = 'admin'
+        or (
+          public.current_ihms_role() = 'manager'
+          and coalesce(payload ->> 'role', '') <> 'admin'
+        )
       when 'leaves' then
         public.current_ihms_role() in ('admin', 'manager')
       when 'expenses' then public.current_ihms_role() = 'admin'
@@ -396,7 +407,12 @@ create policy "Delete permitted hospital records"
   using (
     case record_type
       when 'appointments' then public.current_ihms_role() in ('admin', 'manager', 'receptionist')
-      when 'attendance' then public.current_ihms_role() in ('admin', 'manager')
+      when 'attendance' then
+        public.current_ihms_role() = 'admin'
+        or (
+          public.current_ihms_role() = 'manager'
+          and coalesce(payload ->> 'role', '') <> 'admin'
+        )
       when 'leaves' then public.current_ihms_role() in ('admin', 'manager')
       when 'expenses' then public.current_ihms_role() = 'admin'
       else false
@@ -417,7 +433,15 @@ declare
   clock_in_time timestamptz;
   clock_out_time timestamptz;
 begin
-  if actor_role in ('admin', 'manager') then
+  if actor_role = 'admin'
+    or (
+      actor_role = 'manager'
+      and not (
+        old.record_type = 'attendance'
+        and old.owner_id = (select auth.uid())::text
+      )
+    )
+  then
     new.updated_at := now();
     return new;
   end if;
@@ -523,7 +547,7 @@ begin
         or (new.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
           <> (old.payload - 'status' - 'feeCollected' - 'paymentMethod' - 'paidAt' - 'billingApproved')
         or coalesce(new.payload ->> 'status', '') not in (
-          'scheduled', 'waiting', 'in_consultation', 'cancelled'
+          'scheduled', 'waiting', 'in_consultation', 'completed', 'cancelled'
         )
         or coalesce(new.payload ->> 'feeCollected', '') not in ('true', 'false')
         or (
@@ -558,7 +582,7 @@ begin
       raise exception 'Role cannot update appointments';
     end if;
   elsif old.record_type = 'attendance' then
-    if actor_role not in ('doctor', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
+    if actor_role not in ('doctor', 'manager', 'receptionist', 'nurse', 'cleaner', 'ward_boy', 'other')
       or old.owner_id <> (select auth.uid())::text
       or (new.payload - 'clockOut' - 'clockOutAt' - 'hoursWorked' - 'notes')
         <> (old.payload - 'clockOut' - 'clockOutAt' - 'hoursWorked' - 'notes')
