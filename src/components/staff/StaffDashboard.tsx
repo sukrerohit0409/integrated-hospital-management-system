@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { User, AttendanceRecord, LeaveRequest } from '../../types';
 import { store } from '../../data/store';
 import { useHospitalDate } from '../../hooks/useHospitalDate';
+import { getUserInitials } from '../../utils/userDisplay';
 import {
   Clock,
   Calendar,
@@ -144,7 +145,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({ currentUser }) =
       <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-teal-600 text-white font-bold flex items-center justify-center text-base sm:text-lg shrink-0">
-            {currentUser?.name.charAt(0) || 'S'}
+            {getUserInitials(currentUser?.name || 'Staff')}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

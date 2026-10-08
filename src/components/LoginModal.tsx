@@ -148,12 +148,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
 
     if (data.session) {
-      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
-      if (signOutError) {
-        setError(`Email confirmation is not enabled, and the automatic session could not be cleared: ${signOutError.message}`);
-        return;
+      try {
+        const user = await getSignedInProfile();
+        if (user) {
+          onLoginSuccess(user);
+          onClose();
+          return;
+        }
+      } catch (profileError) {
+        console.error('Could not load profile immediately after registration:', profileError);
       }
-      setError('Email confirmation is disabled for this Supabase project. Ask the administrator to enable Confirm email before registering patients.');
+      setRegistrationMessage('Account registered and confirmed. You may now sign in.');
+      setIsRegister(false);
+      setPassword('');
       return;
     }
 

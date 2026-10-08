@@ -21,7 +21,9 @@ export default async function handler(req: Request, res: Response) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
+  const authHeader = (req.headers as Record<string, string | undefined>)?.authorization
+    || (req.headers as Record<string, string | undefined>)?.[Object.keys(req.headers || {}).find((k) => k.toLowerCase() === 'authorization') || ''];
+  const token = typeof authHeader === 'string' ? authHeader.match(/^Bearer (.+)$/i)?.[1] : undefined;
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -85,7 +87,7 @@ export default async function handler(req: Request, res: Response) {
       department: typeof body.department === 'string' ? body.department.trim() : undefined,
       specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
       qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
-      age: Number.isInteger(body.age) ? body.age : undefined,
+      age: Number.isInteger(body.age) ? (body.age as number) : Number.isInteger(Number(body.age)) && Number(body.age) > 0 ? Number(body.age) : undefined,
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };
@@ -138,7 +140,7 @@ export default async function handler(req: Request, res: Response) {
       department: typeof body.department === 'string' ? body.department.trim() : undefined,
       specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
       qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
-      age: Number.isInteger(body.age) ? body.age : undefined,
+      age: Number.isInteger(body.age) ? (body.age as number) : Number.isInteger(Number(body.age)) && Number(body.age) > 0 ? Number(body.age) : undefined,
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };

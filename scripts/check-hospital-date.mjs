@@ -29,4 +29,13 @@ assert(
 const midnight = new Date('2026-10-06T18:30:00.000Z');
 assert(!isHospitalTimeSlotPast('2026-10-07', '09:00 AM', midnight), '09:00 AM must remain bookable just after midnight IST');
 
-console.log('hospitalDate checks passed');
+import { getUserInitials } from '../src/utils/userDisplay.ts';
+
+assert(getUserInitials('Dr. Rohan Sharma (Cardiology)') === 'RS', 'Doctor with specialty must show initials RS, not D(');
+assert(getUserInitials('Dr. Ananya Iyer (Pediatrics)') === 'AI', 'Doctor with specialty must show initials AI, not D(');
+assert(getUserInitials('Vikram Mehta (Manager)') === 'VM', 'Manager with role title must show initials VM, not V(');
+assert(getUserInitials('Rohit') === 'R', 'Single name must show first letter');
+assert(getUserInitials('Ravi Gupta') === 'RG', 'Two names must show first and last initials');
+assert(getUserInitials('Sister Priya Sharma') === 'PS', 'Sister title must skip honorific and show PS');
+
+console.log('hospitalDate and userDisplay checks passed');

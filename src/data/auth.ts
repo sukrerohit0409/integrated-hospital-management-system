@@ -29,12 +29,12 @@ export async function getSignedInProfile(): Promise<User | null> {
     .single<Profile>();
   if (error) throw error;
 
-  if (data.details.status === 'inactive') {
+  if (data.details?.status === 'inactive') {
     throw new Error('This account is inactive. Contact a hospital administrator.');
   }
 
   return {
-    ...data.details,
+    ...(data.details || {}),
     id: data.id,
     name: getUserDisplayName(data.name, data.email, data.role),
     email: data.email,
@@ -42,7 +42,7 @@ export async function getSignedInProfile(): Promise<User | null> {
     role: data.role,
     isOnline: true,
     mustSetPassword: user.user_metadata?.mustSetPassword === true,
-    status: data.details.status || 'active',
+    status: data.details?.status || 'active',
     createdAt: data.created_at,
   };
 }

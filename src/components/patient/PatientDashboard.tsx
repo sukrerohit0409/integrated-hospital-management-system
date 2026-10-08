@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
 import { firstOpenHospitalSlot, getHospitalDate, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
+import { getUserInitials } from '../../utils/userDisplay';
 
 interface PatientDashboardProps {
   currentUser: User | null;
@@ -334,7 +335,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
       <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-teal-600 text-white font-bold flex items-center justify-center text-lg sm:text-xl shadow-xs shrink-0">
-            {currentUser?.name.charAt(0) || 'P'}
+            {getUserInitials(currentUser?.name || 'Patient')}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

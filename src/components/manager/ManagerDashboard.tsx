@@ -4,6 +4,7 @@ import { store } from '../../data/store';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { useHospitalDate } from '../../hooks/useHospitalDate';
+import { getUserInitials } from '../../utils/userDisplay';
 import { AttendanceMarker } from '../AttendanceMarker';
 import {
   Eye,
@@ -334,7 +335,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
                       <div className="flex items-center gap-3">
                         <div className="relative">
                           <div className="w-10 h-10 rounded-full bg-slate-100 text-slate-800 font-bold flex items-center justify-center text-sm border border-slate-200">
-                            {staff.name.charAt(0)}
+                            {getUserInitials(staff.name)}
                           </div>
                           <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${
                             staff.status === 'active' ? 'bg-emerald-500' : staff.status === 'on_leave' ? 'bg-amber-500' : 'bg-slate-400'

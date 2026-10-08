@@ -21,9 +21,20 @@ export function getUserDisplayName(
 }
 
 export function getUserInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 'U';
-  return words.length === 1
-    ? words[0].charAt(0).toUpperCase()
-    : `${words[0].charAt(0)}${words[words.length - 1].charAt(0)}`.toUpperCase();
+  const cleaned = (name || '').replace(/\s*\([^)]*\)/g, '').trim();
+  const rawWords = cleaned.split(/\s+/).filter(Boolean);
+  if (rawWords.length === 0) return 'U';
+
+  const honorifics = new Set(['dr', 'dr.', 'sister', 'mr', 'mr.', 'mrs', 'mrs.', 'ms', 'ms.', 'prof', 'prof.']);
+  const words = rawWords.length > 1 && honorifics.has(rawWords[0].toLowerCase())
+    ? rawWords.slice(1)
+    : rawWords;
+
+  const firstLetter = words[0].replace(/[^a-zA-Z0-9]/g, '').charAt(0);
+  const lastWord = words[words.length - 1].replace(/[^a-zA-Z0-9]/g, '');
+  const lastLetter = words.length > 1 ? lastWord.charAt(0) : '';
+
+  const initials = `${firstLetter}${lastLetter}`.toUpperCase();
+  return initials || 'U';
 }
+
