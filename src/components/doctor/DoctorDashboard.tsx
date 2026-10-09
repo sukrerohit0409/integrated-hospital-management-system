@@ -146,9 +146,9 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
       apt.prescription?.tablets && apt.prescription.tablets.length > 0
         ? apt.prescription.tablets
         : [
-            { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
-            { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
-          ]
+          { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
+          { name: '', dosage: '', frequency: '', duration: '', instructions: '' },
+        ]
     );
     setAvoidList(apt.prescription?.thingsToAvoid || []);
     setFollowUpDate(apt.prescription?.followUpDate || '');
@@ -305,11 +305,10 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
         <div className="flex items-center gap-1 sm:gap-1.5 bg-slate-100 p-1 rounded-xl overflow-x-auto w-full lg:w-auto shrink-0">
           <button
             onClick={() => setFilter('now')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-              filter === 'now'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${filter === 'now'
                 ? 'bg-amber-500 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <Clock className="w-3.5 h-3.5 shrink-0" />
             <span>Now / Queue ({doctorAppointments.filter(isQueueAppointment).length})</span>
@@ -317,11 +316,10 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
 
           <button
             onClick={() => setFilter('upcoming')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-              filter === 'upcoming'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${filter === 'upcoming'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <Calendar className="w-3.5 h-3.5 shrink-0" />
             <span>Upcoming ({doctorAppointments.filter(isUpcomingAppointment).length})</span>
@@ -329,11 +327,10 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
 
           <button
             onClick={() => setFilter('completed')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-              filter === 'completed'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${filter === 'completed'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
             <span>Completed ({doctorAppointments.filter((a) => a.status === 'completed').length})</span>
@@ -354,8 +351,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
               {filter === 'now'
                 ? "Immediate clinical consultations in doctor chamber or next in lounge"
                 : filter === 'upcoming'
-                ? "Scheduled slots for upcoming hours and future dates"
-                : "Finished consultations with generated prescriptions and follow-up schedules"}
+                  ? "Scheduled slots for upcoming hours and future dates"
+                  : "Finished consultations with generated prescriptions and follow-up schedules"}
             </p>
           </div>
 
@@ -375,9 +372,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
           {filteredAppointments.map((apt) => (
             <div
               key={apt.id}
-              className={`p-4 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-                apt.status === 'in_consultation' ? 'bg-amber-50/40' : 'hover:bg-slate-50/70'
-              }`}
+              className={`p-4 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4 ${apt.status === 'in_consultation' ? 'bg-amber-50/40' : 'hover:bg-slate-50/70'
+                }`}
             >
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -389,15 +385,14 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
                   <span className="text-xs text-slate-600 font-medium">
                     {apt.patientAge || '32'} Yrs · {apt.patientGender || 'Unspecified'}
                   </span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${
-                    apt.status === 'in_consultation'
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${apt.status === 'in_consultation'
                       ? 'bg-amber-100 text-amber-800'
                       : apt.status === 'completed'
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : apt.status === 'waiting'
-                      ? 'bg-blue-100 text-blue-800'
-                      : 'bg-slate-100 text-slate-700'
-                  }`}>
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : apt.status === 'waiting'
+                          ? 'bg-blue-100 text-blue-800'
+                          : 'bg-slate-100 text-slate-700'
+                    }`}>
                     {apt.status.replace('_', ' ')}
                   </span>
                 </div>

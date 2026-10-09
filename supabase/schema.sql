@@ -141,6 +141,71 @@ create table if not exists public.ihms_prescriptions (
 
 create index if not exists ihms_prescriptions_patient_idx on public.ihms_prescriptions (patient_id);
 create index if not exists ihms_prescriptions_doctor_idx on public.ihms_prescriptions (doctor_id);
+
+create table if not exists public.ihms_email_notifications (
+  appointment_id text primary key,
+  notification_type text not null check (notification_type = 'appointment_confirmation'),
+  recipient_email text not null,
+  status text not null check (status in ('sending', 'sent', 'failed')),
+  provider_message_id text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  sent_at timestamptz
+);
+
+alter table public.ihms_email_notifications enable row level security;
+revoke all on public.ihms_email_notifications from anon, authenticated;
+revoke all on public.ihms_email_notifications from public;
+
+create or replace function public.claim_ihms_appointment_confirmation(
+  p_appointment_id text,
+  p_recipient_email text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  claimed boolean;
+begin
+  insert into public.ihms_email_notifications (
+    appointment_id,
+    notification_type,
+    recipient_email,
+    status
+  )
+  values (
+    p_appointment_id,
+    'appointment_confirmation',
+    p_recipient_email,
+    'sending'
+  )
+  on conflict (appointment_id) do nothing;
+
+  if found then return true; end if;
+
+  update public.ihms_email_notifications
+  set recipient_email = p_recipient_email,
+      status = 'sending',
+      updated_at = now(),
+      sent_at = null,
+      provider_message_id = null
+  where appointment_id = p_appointment_id
+    and notification_type = 'appointment_confirmation'
+    and (
+      status = 'failed'
+      or (status = 'sending' and updated_at < now() - interval '10 minutes')
+    )
+  returning true into claimed;
+
+  return coalesce(claimed, false);
+end;
+$$;
+
+revoke all on function public.claim_ihms_appointment_confirmation(text, text) from public, anon, authenticated;
+grant execute on function public.claim_ihms_appointment_confirmation(text, text) to service_role;
+
 create unique index if not exists ihms_revenue_appointment_unique
   on public.ihms_records ((payload ->> 'appointmentId'))
   where record_type = 'revenue' and payload ->> 'appointmentId' is not null;

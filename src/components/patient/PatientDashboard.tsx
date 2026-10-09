@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { User, Appointment, Prescription } from '../../types';
 import { store } from '../../data/store';
+import { sendAppointmentConfirmation } from '../../data/appointmentEmails';
 import { supabase } from '../../lib/supabase';
 import {
   Calendar,
@@ -204,6 +205,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
       }));
       return;
     }
+    if (supabase) {
+      try {
+        await sendAppointmentConfirmation(newApt.id);
+      } catch (error) {
+        console.error('Appointment was saved, but the confirmation email failed:', error);
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: 'Appointment confirmed, but the confirmation email could not be sent.',
+        }));
+      }
+    }
     setBookingSuccessToken(newApt.tokenNumber);
     setBookingReason('');
   };
@@ -221,6 +232,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
       (appointment) => appointment.followUpForAppointmentId === apt.id
     );
 
+    let createdFollowUp = false;
     if (!followUp) {
       const isLocallyTaken = (slot: string) => appointments.some((existing) =>
         existing.doctorId === apt.doctorId
@@ -295,6 +307,18 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
         }));
         return;
       }
+      createdFollowUp = true;
+    }
+
+    if (supabase && createdFollowUp && followUp) {
+      try {
+        await sendAppointmentConfirmation(followUp.id);
+      } catch (error) {
+        console.error('Follow-up appointment was saved, but the confirmation email failed:', error);
+        window.dispatchEvent(new CustomEvent('ihms:data-error', {
+          detail: 'Follow-up appointment confirmed, but the confirmation email could not be sent.',
+        }));
+      }
     }
 
     store.updateFollowUpStatus(apt.id, 'booked');
@@ -360,11 +384,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
         <div className="flex items-center gap-1 sm:gap-1.5 bg-slate-100 p-1 rounded-xl overflow-x-auto w-full lg:w-auto shrink-0">
           <button
             onClick={() => setActiveTab('history')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'history'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${activeTab === 'history'
                 ? 'bg-white text-slate-900 shadow-xs font-bold'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <FileText className="w-3.5 h-3.5 text-teal-600" />
             <span>Visit History & Rx ({myAppointments.length})</span>
@@ -372,11 +395,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
           <button
             onClick={() => setActiveTab('book')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'book'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${activeTab === 'book'
                 ? 'bg-teal-600 text-white shadow-xs font-bold'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <Calendar className="w-3.5 h-3.5" />
             <span>+ Book Slot</span>
@@ -384,11 +406,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
 
           <button
             onClick={() => setActiveTab('follow_ups')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${
-              activeTab === 'follow_ups'
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center gap-1.5 shrink-0 ${activeTab === 'follow_ups'
                 ? 'bg-white text-slate-900 shadow-xs font-bold'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <CalendarCheck className="w-3.5 h-3.5 text-amber-600" />
             <span>Follow-Ups ({activeFollowUps.length})</span>
@@ -465,13 +486,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                       <span className="text-xs font-mono text-slate-500">
                         {apt.date} at {apt.timeSlot}
                       </span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${
-                        apt.status === 'completed'
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${apt.status === 'completed'
                           ? 'bg-emerald-100 text-emerald-800'
                           : apt.status === 'in_consultation'
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}>
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-blue-100 text-blue-800'
+                        }`}>
                         {apt.status.replace('_', ' ')}
                       </span>
                     </div>
@@ -661,11 +681,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                   {doctors.map((doc) => (
                     <label
                       key={doc.id}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                        selectedDoctorId === doc.id
+                      className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${selectedDoctorId === doc.id
                           ? 'border-teal-600 bg-teal-50/60 shadow-2xs ring-1 ring-teal-600'
                           : 'border-slate-200 bg-white hover:border-slate-300'
-                      }`}
+                        }`}
                     >
                       <input
                         type="radio"
@@ -745,15 +764,14 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
                         type="button"
                         disabled={isBooked || isPast}
                         onClick={() => setBookingSlot(slot)}
-                        className={`p-2.5 rounded-lg border text-center transition-all text-xs font-mono font-medium ${
-                          isPast
+                        className={`p-2.5 rounded-lg border text-center transition-all text-xs font-mono font-medium ${isPast
                             ? 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
                             : isBooked
-                            ? 'bg-rose-50 border-rose-200 text-rose-400 cursor-not-allowed line-through'
-                            : bookingSlot === slot
-                            ? 'bg-teal-600 border-teal-600 text-white font-bold shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-700 hover:border-teal-500 hover:bg-teal-50/50'
-                        }`}
+                              ? 'bg-rose-50 border-rose-200 text-rose-400 cursor-not-allowed line-through'
+                              : bookingSlot === slot
+                                ? 'bg-teal-600 border-teal-600 text-white font-bold shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-700 hover:border-teal-500 hover:bg-teal-50/50'
+                          }`}
                       >
                         {slot}
                       </button>

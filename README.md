@@ -112,6 +112,21 @@ This is an educational demo foundation, not a compliance certification or a subs
 
 ## Deploy to Vercel
 
+### Patient appointment confirmation email
+
+Patient-created appointments send a confirmation email after the appointment is persisted. The server-side Vercel function reads Gmail SMTP settings only from environment variables and sends only to the authenticated patient's profile email. The appointment email notification ledger is created by [`supabase/schema.sql`](./supabase/schema.sql); rerun the schema before enabling this workflow on an existing Supabase project.
+
+Configure these server-only Vercel variables:
+
+- `SMTP_HOST=smtp.gmail.com`
+- `SMTP_PORT=465`
+- `SMTP_USER=your Gmail address`
+- `SMTP_PASS=your Google App Password`
+- `SMTP_FROM_NAME=Integrated Hospital Management System`
+- `SMTP_FROM_EMAIL=your Gmail address`
+
+Do not prefix SMTP variables with `VITE_`. The Gmail account must have 2-Step Verification enabled and use a Google App Password. Email delivery failures do not create duplicate appointments; the booking remains persisted and can be retried safely through the notification ledger.
+
 1. Push the project to a Git provider and import it in Vercel.
 2. Use the default Vite settings (`npm run build`, output directory `dist`); [`vercel.json`](./vercel.json) declares them.
 3. Set the Supabase environment variables above in Vercel. Do not add a Supabase `service_role` key to any `VITE_` variable or browser code.

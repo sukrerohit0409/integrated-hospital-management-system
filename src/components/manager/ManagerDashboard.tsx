@@ -83,10 +83,11 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !email || !phone) return;
-    const initialPassword = staffPassword.trim() || 'Hospital@123';
-    if (supabase && initialPassword.length < 8) {
+    const initialPassword = staffPassword.trim();
+    const minimumPasswordLength = supabase ? 8 : 4;
+    if (initialPassword.length < minimumPasswordLength) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
-        detail: 'Set an initial staff password with at least 8 characters.',
+        detail: `Set an initial staff password with at least ${minimumPasswordLength} characters.`,
       }));
       return;
     }
@@ -822,13 +823,13 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
 
               <div>
                 <label className="block text-slate-700 font-semibold mb-1">
-                  {supabase ? 'Initial Login Password *' : 'Demo Login Password (Optional)'}
+                  Initial Login Password *
                 </label>
                 <input
                   type="password"
-                  required={Boolean(supabase)}
-                  minLength={supabase ? 8 : undefined}
-                  placeholder={supabase ? 'At least 8 characters' : 'Demo account password'}
+                  required
+                  minLength={supabase ? 8 : 4}
+                  placeholder={`At least ${supabase ? 8 : 4} characters`}
                   value={staffPassword}
                   onChange={(e) => setStaffPassword(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600 font-mono text-xs"
@@ -837,7 +838,7 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
               <p className="text-[10px] text-slate-500">
                 {supabase
                   ? 'Staff email is confirmed automatically. Share this initial password securely with the staff member.'
-                  : 'Demo accounts use the entered password or Hospital@123 by default.'}
+                  : 'Enter and share this initial password securely with the staff member.'}
               </p>
 
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">

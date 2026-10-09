@@ -9,6 +9,7 @@ interface ChangePasswordModalProps {
   onClose: () => void;
   currentUser: User | null;
   onPasswordUpdated: () => void;
+  isPasswordRecovery?: boolean;
 }
 
 export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
@@ -16,6 +17,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
   onClose,
   currentUser,
   onPasswordUpdated,
+  isPasswordRecovery = false,
 }) => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -31,8 +33,9 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     setSuccess(false);
 
     const mustSetPassword = Boolean(currentUser.mustSetPassword);
+    const requiresCurrentPassword = !mustSetPassword && !isPasswordRecovery;
     const actualCurrentPass = currentUser.password || currentUser.email;
-    if (!supabase && !mustSetPassword && currentPassword !== actualCurrentPass) {
+    if (!supabase && requiresCurrentPassword && currentPassword !== actualCurrentPass) {
       setError('Current password does not match our records.');
       return;
     }
@@ -48,7 +51,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
     }
 
     if (supabase) {
-      if (!mustSetPassword) {
+      if (requiresCurrentPassword) {
         const { error: verificationError } = await supabase.auth.signInWithPassword({
           email: currentUser.email,
           password: currentPassword,
@@ -93,9 +96,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 bg-slate-50 shrink-0">
           <div className="flex items-center gap-2">
             <KeyRound className="w-4 h-4 text-teal-600" />
-            <h3 className="text-sm font-bold text-slate-900">Change Password</h3>
+            <h3 className="text-sm font-bold text-slate-900">
+              {isPasswordRecovery ? 'Reset Password' : 'Change Password'}
+            </h3>
           </div>
-          {!currentUser.mustSetPassword && (
+          {!currentUser.mustSetPassword && !isPasswordRecovery && (
             <button
               onClick={onClose}
               className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
@@ -125,7 +130,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
             </div>
           )}
 
-          {!currentUser.mustSetPassword && (
+          {!currentUser.mustSetPassword && !isPasswordRecovery && (
             <div>
               <label className="block text-slate-700 font-semibold mb-1">
                 Current Password
@@ -170,7 +175,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
           </div>
 
           <div className="pt-2 flex items-center justify-end gap-2">
-            {!currentUser.mustSetPassword && (
+            {!currentUser.mustSetPassword && !isPasswordRecovery && (
               <button
                 type="button"
                 onClick={onClose}
@@ -183,7 +188,11 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
               type="submit"
               className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg shadow-xs transition-colors"
             >
-              {currentUser.mustSetPassword ? 'Set Password' : 'Save New Password'}
+              {isPasswordRecovery
+                ? 'Reset Password'
+                : currentUser.mustSetPassword
+                  ? 'Set Password'
+                  : 'Save New Password'}
             </button>
           </div>
         </form>

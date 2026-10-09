@@ -15,12 +15,19 @@ import { StaffDashboard } from './components/staff/StaffDashboard';
 import { PatientDashboard } from './components/patient/PatientDashboard';
 import { Building2, Phone, ShieldCheck, HeartHandshake, Stethoscope, Clock } from 'lucide-react';
 
+function hasPasswordRecoveryMarker(): boolean {
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const searchParams = new URLSearchParams(window.location.search);
+  return hashParams.get('type') === 'recovery' || searchParams.get('type') === 'recovery';
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(
     () => import.meta.env.DEV && !supabase ? store.getCurrentUser() : null
   );
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(hasPasswordRecoveryMarker);
   const [isLoadingSharedData, setIsLoadingSharedData] = useState(Boolean(supabase));
   const [dataError, setDataError] = useState('');
   const stopSharedSync = useRef<(() => void) | null>(null);
@@ -69,6 +76,11 @@ export default function App() {
       };
       void restoreSession();
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setIsPasswordRecovery(true);
+          setIsLoginModalOpen(false);
+          setIsChangePasswordModalOpen(true);
+        }
         if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') return;
         window.setTimeout(() => {
           if (!session) {
@@ -80,11 +92,13 @@ export default function App() {
             if (active) {
               setCurrentUser(null);
               setIsChangePasswordModalOpen(false);
+              setIsPasswordRecovery(false);
               setIsLoadingSharedData(false);
             }
             return;
           }
-          if (event === 'SIGNED_IN' && session.user.id !== activeUserIdRef.current) {
+          if ((event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY')
+            && session.user.id !== activeUserIdRef.current) {
             void restoreSession();
           }
         }, 0);
@@ -129,12 +143,14 @@ export default function App() {
     store.setCurrentUser(null);
     setCurrentUser(null);
     setIsChangePasswordModalOpen(false);
+    setIsPasswordRecovery(false);
     setIsLoginModalOpen(true);
   };
 
   const handleLoginSuccess = async (user: User) => {
     activeUserIdRef.current = user.id;
     store.setCurrentUser(user);
+    setIsPasswordRecovery(false);
     setIsChangePasswordModalOpen(Boolean(user.mustSetPassword));
     if (supabase) {
       const loadId = ++sessionLoadId.current;
@@ -167,6 +183,10 @@ export default function App() {
     const updatedUser = { ...currentUser, mustSetPassword: false };
     store.setCurrentUser(updatedUser);
     setCurrentUser(updatedUser);
+    if (isPasswordRecovery) {
+      window.history.replaceState(null, document.title, `${window.location.pathname}${window.location.search}`);
+      setIsPasswordRecovery(false);
+    }
   };
 
   return (
@@ -269,12 +289,13 @@ export default function App() {
 
       {/* Change Password Modal */}
       <ChangePasswordModal
-        isOpen={isChangePasswordModalOpen || Boolean(currentUser?.mustSetPassword)}
+        isOpen={isChangePasswordModalOpen || isPasswordRecovery || Boolean(currentUser?.mustSetPassword)}
         onClose={() => {
-          if (!currentUser?.mustSetPassword) setIsChangePasswordModalOpen(false);
+          if (!currentUser?.mustSetPassword && !isPasswordRecovery) setIsChangePasswordModalOpen(false);
         }}
         currentUser={currentUser}
         onPasswordUpdated={handlePasswordUpdated}
+        isPasswordRecovery={isPasswordRecovery}
       />
     </div>
   );

@@ -22,6 +22,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [registrationMessage, setRegistrationMessage] = useState('');
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [isResetSubmitting, setIsResetSubmitting] = useState(false);
 
   // Register form states (for Patient registration)
   const [regName, setRegName] = useState('');
@@ -171,6 +174,39 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     setPassword('');
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setRegistrationMessage('');
+
+    if (!supabase) {
+      setError('Password reset requires a configured Supabase project with email delivery enabled.');
+      return;
+    }
+
+    const email = forgotEmail.trim().toLowerCase();
+    if (!email) {
+      setError('Enter the email address associated with your account.');
+      return;
+    }
+
+    setIsResetSubmitting(true);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (resetError) {
+        setError(getAuthErrorMessage(resetError.message));
+        return;
+      }
+      setRegistrationMessage(
+        'If an account uses this email address, a password reset link has been sent. Check your inbox and follow the link to choose a new password.'
+      );
+    } finally {
+      setIsResetSubmitting(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
       <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[90vh] flex flex-col">
@@ -178,7 +214,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         <div className="flex items-center justify-between px-5 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 bg-slate-50 shrink-0">
           <div>
             <h3 className="text-sm sm:text-base font-bold text-slate-900">
-              {isRegister ? 'New Patient Registration' : 'IHMS Account Sign In'}
+              {isRegister
+                ? 'New Patient Registration'
+                : isForgotPassword
+                  ? 'Reset Your Password'
+                  : 'IHMS Account Sign In'}
             </h3>
             <p className="text-[11px] sm:text-xs text-slate-500">
               Integrated Hospital Management System
@@ -307,6 +347,33 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <span>Create Patient Account</span>
               </button>
             </form>
+          ) : isForgotPassword ? (
+            <form onSubmit={handleForgotPassword} className="space-y-3.5 text-xs">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Enter your account email and we will send a secure password reset link.
+              </p>
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Account Email Address *
+                </label>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  placeholder="e.g. patient@gmail.com"
+                  value={forgotEmail}
+                  onChange={(e) => setForgotEmail(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isResetSubmitting}
+                className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold rounded-lg shadow-xs transition-colors flex items-center justify-center gap-2 mt-4"
+              >
+                <span>{isResetSubmitting ? 'Sending Reset Link…' : 'Send Reset Link'}</span>
+              </button>
+            </form>
           ) : (
             <form onSubmit={handleLogin} className="space-y-3.5 text-xs">
               <div>
@@ -326,6 +393,20 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-slate-700 font-semibold">Password</label>
+                  {supabase && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsForgotPassword(true);
+                        setError('');
+                        setRegistrationMessage('');
+                        setForgotEmail(identifier.includes('@') ? identifier.trim() : '');
+                      }}
+                      className="text-[11px] text-teal-700 font-semibold hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
                 </div>
                 <input
                   type="password"
@@ -352,13 +433,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                setIsRegister(!isRegister);
                 setError('');
                 setRegistrationMessage('');
+                setIsForgotPassword(false);
+                setIsRegister(!isRegister);
               }}
               className="text-teal-700 font-semibold hover:underline"
             >
-              {isRegister
+              {isForgotPassword
+                ? 'Back to Sign In'
+                : isRegister
                 ? 'Already have an account? Sign In'
                 : 'New patient? Register profile'}
             </button>
