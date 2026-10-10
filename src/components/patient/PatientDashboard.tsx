@@ -22,9 +22,11 @@ import {
 import { PrintPrescriptionModal } from '../PrintPrescriptionModal';
 import { firstOpenHospitalSlot, getHospitalDate, isHospitalTimeSlotPast } from '../../utils/hospitalDate';
 import { getUserInitials } from '../../utils/userDisplay';
+import { APPOINTMENT_TIME_SLOTS } from '../../data/appointmentSchedule';
 
 interface PatientDashboardProps {
   currentUser: User | null;
+  initialTab?: 'history' | 'book' | 'follow_ups' | 'profile';
 }
 
 function isBookedSlot(value: unknown): value is { time_slot: string } {
@@ -34,8 +36,12 @@ function isBookedSlot(value: unknown): value is { time_slot: string } {
     && typeof value.time_slot === 'string';
 }
 
-export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'history' | 'book' | 'follow_ups' | 'profile'>('history');
+export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser, initialTab = 'history' }) => {
+  const [activeTab, setActiveTab] = useState<'history' | 'book' | 'follow_ups' | 'profile'>(initialTab);
+
+  React.useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   const [appointments, setAppointments] = useState<Appointment[]>(() => store.getAppointments());
   const [users, setUsers] = useState<User[]>(() => store.getUsers());
@@ -44,7 +50,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('All');
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('');
   const [bookingDate, setBookingDate] = useState<string>(() => getHospitalDate());
-  const [bookingSlot, setBookingSlot] = useState<string>('10:00 AM');
+  const [bookingSlot, setBookingSlot] = useState<string>(() => firstOpenHospitalSlot(APPOINTMENT_TIME_SLOTS, getHospitalDate(), () => false) || '09:00 AM');
   const [bookingReason, setBookingReason] = useState<string>('');
   const [bookingSuccessToken, setBookingSuccessToken] = useState<string | null>(null);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
@@ -108,6 +114,35 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
     };
   }, [selectedDoctorId, bookingDate, activeTab]);
 
+  React.useEffect(() => {
+    const isPast = isHospitalTimeSlotPast(bookingDate, bookingSlot);
+    const isBooked = supabase
+      ? bookedSlots.includes(bookingSlot)
+      : appointments.some(
+          (a) =>
+            a.doctorId === selectedDoctorId &&
+            a.date === bookingDate &&
+            a.timeSlot === bookingSlot &&
+            a.status !== 'cancelled'
+        );
+    if (isPast || isBooked) {
+      const isTaken = (slot: string) =>
+        supabase
+          ? bookedSlots.includes(slot)
+          : appointments.some(
+              (a) =>
+                a.doctorId === selectedDoctorId &&
+                a.date === bookingDate &&
+                a.timeSlot === slot &&
+                a.status !== 'cancelled'
+            );
+      const nextOpen = firstOpenHospitalSlot(TIME_SLOTS, bookingDate, isTaken);
+      if (nextOpen) {
+        setBookingSlot(nextOpen);
+      }
+    }
+  }, [bookingDate, selectedDoctorId, bookedSlots, appointments, bookingSlot]);
+
   // Filter patient's appointments
   const myAppointments = useMemo(() => {
     return appointments.filter(
@@ -128,21 +163,21 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser 
     );
   }, [myAppointments]);
 
-  // Available Time Slots for booking
-  const TIME_SLOTS = [
-    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-    '04:30 PM', '05:00 PM'
-  ];
+  const TIME_SLOTS = APPOINTMENT_TIME_SLOTS;
 
 
   const handleBookAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    if (bookingDate < getHospitalDate() || isHospitalTimeSlotPast(bookingDate, bookingSlot)) {
+    if (bookingDate < getHospitalDate()) {
       window.dispatchEvent(new CustomEvent('ihms:data-error', {
         detail: 'Please choose today or a future date for the appointment.',
+      }));
+      return;
+    }
+    if (isHospitalTimeSlotPast(bookingDate, bookingSlot)) {
+      window.dispatchEvent(new CustomEvent('ihms:data-error', {
+        detail: 'That appointment time slot has already passed. Choose an upcoming time slot.',
       }));
       return;
     }

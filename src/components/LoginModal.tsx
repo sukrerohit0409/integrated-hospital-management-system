@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
 import { store } from '../data/store';
+import { LOCAL_DEMO_PASSWORD } from '../data/mockData';
 import { getSignedInProfile } from '../data/auth';
 import { getAuthErrorMessage } from '../data/authErrors';
 import { supabase } from '../lib/supabase';
@@ -33,6 +34,24 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [regAge, setRegAge] = useState('32');
   const [regGender, setRegGender] = useState<'Male' | 'Female' | 'Other'>('Male');
   const [regPassword, setRegPassword] = useState('');
+
+  React.useEffect(() => {
+    if (isOpen) return;
+    setIsRegister(false);
+    setIdentifier('');
+    setPassword('');
+    setError('');
+    setRegistrationMessage('');
+    setIsForgotPassword(false);
+    setForgotEmail('');
+    setIsResetSubmitting(false);
+    setRegName('');
+    setRegEmail('');
+    setRegPhone('');
+    setRegAge('32');
+    setRegGender('Male');
+    setRegPassword('');
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -93,8 +112,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
 
     // Password check
-    const expectedPass = user.password || user.email;
-    if (password !== expectedPass) {
+    const isValidPass =
+      password === user.password ||
+      password === user.email ||
+      (user.password === LOCAL_DEMO_PASSWORD && password === user.email);
+    if (!isValidPass) {
       setError(`Incorrect password. Please verify your credentials.`);
       return;
     }
@@ -383,7 +405,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder={supabase ? 'e.g. rohit@gmail.com' : 'e.g. rohit@gmail.com or 1122334455'}
+                  placeholder={supabase ? 'Enter your registered email address' : 'Enter your email or mobile number'}
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-teal-600"

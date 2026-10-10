@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, UserRole } from './types';
+import { User } from './types';
 import { store } from './data/store';
 import { clearSharedStore, initializeSharedStore } from './data/store';
 import { getSignedInProfile } from './data/auth';
@@ -13,7 +13,7 @@ import { DoctorDashboard } from './components/doctor/DoctorDashboard';
 import { ReceptionistDashboard } from './components/receptionist/ReceptionistDashboard';
 import { StaffDashboard } from './components/staff/StaffDashboard';
 import { PatientDashboard } from './components/patient/PatientDashboard';
-import { Building2, Phone, ShieldCheck, HeartHandshake, Stethoscope, Clock } from 'lucide-react';
+import { PublicWebsite } from './components/PublicWebsite';
 
 function hasPasswordRecoveryMarker(): boolean {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -26,6 +26,8 @@ export default function App() {
     () => import.meta.env.DEV && !supabase ? store.getCurrentUser() : null
   );
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [pendingPostLoginAction, setPendingPostLoginAction] = useState<'book' | null>(null);
+  const [openPatientBooking, setOpenPatientBooking] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(hasPasswordRecoveryMarker);
   const [isLoadingSharedData, setIsLoadingSharedData] = useState(Boolean(supabase));
@@ -144,13 +146,19 @@ export default function App() {
     setCurrentUser(null);
     setIsChangePasswordModalOpen(false);
     setIsPasswordRecovery(false);
-    setIsLoginModalOpen(true);
+    setPendingPostLoginAction(null);
+    setOpenPatientBooking(false);
+    setIsLoginModalOpen(false);
   };
 
   const handleLoginSuccess = async (user: User) => {
     activeUserIdRef.current = user.id;
     store.setCurrentUser(user);
     setIsPasswordRecovery(false);
+    if (pendingPostLoginAction === 'book' && user.role === 'patient') {
+      setOpenPatientBooking(true);
+    }
+    setPendingPostLoginAction(null);
     setIsChangePasswordModalOpen(Boolean(user.mustSetPassword));
     if (supabase) {
       const loadId = ++sessionLoadId.current;
@@ -190,95 +198,40 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Top Navbar */}
-      <Navbar
-        currentUser={currentUser}
-        onOpenLogin={() => setIsLoginModalOpen(true)}
-        onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
-        onLogout={handleLogout}
-      />
-
-      {/* Main Hospital Workspace */}
-      <main className="grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {dataError && (
-          <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {dataError}
-          </div>
-        )}
-        {isLoadingSharedData ? (
-          <div className="py-16 text-center text-sm text-slate-600" role="status">
-            Loading your secure hospital workspace…
-          </div>
-        ) : currentUser?.mustSetPassword ? (
-          <div className="py-16 text-center max-w-xl mx-auto space-y-4">
-            <h2 className="text-2xl font-bold text-slate-900">Set up your password</h2>
-            <p className="text-sm text-slate-600">
-              Use the invitation link to choose a private password before entering the hospital workspace.
-            </p>
-          </div>
-        ) : currentUser ? (
-          <>
-            {currentUser.role === 'admin' && <AdminDashboard currentUser={currentUser} />}
-            {currentUser.role === 'manager' && <ManagerDashboard currentUser={currentUser} />}
-            {currentUser.role === 'doctor' && <DoctorDashboard currentUser={currentUser} />}
-            {currentUser.role === 'receptionist' && <ReceptionistDashboard currentUser={currentUser} />}
-            {(currentUser.role === 'nurse' ||
-              currentUser.role === 'cleaner' ||
-              currentUser.role === 'ward_boy' ||
-              currentUser.role === 'other') && (
-              <StaffDashboard currentUser={currentUser} />
-            )}
-            {currentUser.role === 'patient' && <PatientDashboard currentUser={currentUser} />}
-          </>
-        ) : (
-          <div className="py-16 text-center max-w-xl mx-auto space-y-4">
-            <div className="w-16 h-16 rounded-2xl bg-teal-600 text-white flex items-center justify-center mx-auto shadow-md">
-              <Building2 className="w-8 h-8" />
-            </div>
-            <h2 className="text-2xl font-bold text-slate-900">
-              Integrated Hospital Management System
-            </h2>
-            <p className="text-sm text-slate-600 leading-relaxed">
-              Please sign in to access your designated hospital workspace.
-            </p>
-            <div className="pt-2">
-              <button
-                onClick={() => setIsLoginModalOpen(true)}
-                className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
-              >
-                Sign In to Portal
-              </button>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-6 px-4 text-xs text-slate-500 no-print mt-auto">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded bg-teal-700 text-white flex items-center justify-center font-bold text-xs">
-              +
-            </div>
-            <span className="font-bold text-slate-800">PulseCare IHMS</span>
-            <span>·</span>
-            <span>Integrated Hospital Management System</span>
-          </div>
-
-          <div className="flex items-center gap-4 text-[11px] text-slate-500">
-            <span className="flex items-center gap-1 text-teal-800 font-semibold">
-              <Phone className="w-3.5 h-3.5 text-teal-600" />
-              24/7 Emergency: +91 1122334455
-            </span>
-            <span>·</span>
-            <span className="flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-              Educational demo · Not certified for clinical use
-            </span>
-          </div>
-        </div>
-      </footer>
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      {!currentUser ? (
+        <PublicWebsite
+          onOpenLogin={() => {
+            setPendingPostLoginAction(null);
+            setIsLoginModalOpen(true);
+          }}
+          onBookAppointment={() => {
+            setPendingPostLoginAction('book');
+            setIsLoginModalOpen(true);
+          }}
+          showLocalDoctors
+        />
+      ) : (
+        <>
+          <Navbar
+            currentUser={currentUser}
+            onOpenLogin={() => setIsLoginModalOpen(true)}
+            onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
+            onLogout={handleLogout}
+          />
+          <main className="mx-auto flex min-h-[calc(100vh-64px)] w-full max-w-7xl grow flex-col px-4 py-6 sm:px-6 lg:px-8">
+            {dataError && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{dataError}</div>}
+            {isLoadingSharedData ? <div className="py-16 text-center text-sm text-slate-600" role="status">Loading your secure hospital workspace…</div> : currentUser.mustSetPassword ? <div className="mx-auto max-w-xl space-y-4 py-16 text-center"><h2 className="text-2xl font-bold text-slate-900">Set up your password</h2><p className="text-sm text-slate-600">Use the invitation link to choose a private password before entering the hospital workspace.</p></div> : <>
+              {currentUser.role === 'admin' && <AdminDashboard currentUser={currentUser} />}
+              {currentUser.role === 'manager' && <ManagerDashboard currentUser={currentUser} />}
+              {currentUser.role === 'doctor' && <DoctorDashboard currentUser={currentUser} />}
+              {currentUser.role === 'receptionist' && <ReceptionistDashboard currentUser={currentUser} />}
+              {(currentUser.role === 'nurse' || currentUser.role === 'cleaner' || currentUser.role === 'ward_boy' || currentUser.role === 'other') && <StaffDashboard currentUser={currentUser} />}
+              {currentUser.role === 'patient' && <PatientDashboard currentUser={currentUser} initialTab={openPatientBooking ? 'book' : 'history'} />}
+            </>}
+          </main>
+        </>
+      )}
 
       {/* Login & Registration Modal */}
       <LoginModal
