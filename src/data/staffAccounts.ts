@@ -20,14 +20,19 @@ export async function manageStaffAccount(
   input: StaffAccountInput | { action: 'status' | 'remove'; id: string; status?: string }
 ): Promise<string | undefined> {
   if (!supabase) throw new Error('Staff accounts require a configured Supabase project.');
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw sessionError;
-  if (!session) throw new Error('Sign in again to manage staff accounts.');
+  let token = sessionData.session?.access_token;
+  if (!token) {
+    const { data: refreshData } = await supabase.auth.refreshSession();
+    token = refreshData.session?.access_token;
+  }
+  if (!token) throw new Error('Sign in again to manage staff accounts.');
 
   const response = await fetch('/api/staff', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${session.access_token}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(input),

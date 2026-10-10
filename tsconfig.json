@@ -21,6 +21,7 @@
       ]
     },
     "allowImportingTsExtensions": true,
+    "types": ["node"],
     "noEmit": true
   },
   "include": ["src", "vite.config.ts", "api"]

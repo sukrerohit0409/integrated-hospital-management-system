@@ -246,7 +246,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser,
       } catch (error) {
         console.error('Appointment was saved, but the confirmation email failed:', error);
         window.dispatchEvent(new CustomEvent('ihms:data-error', {
-          detail: 'Appointment confirmed, but the confirmation email could not be sent.',
+          detail: error instanceof Error
+            ? `Appointment saved! Note on email: ${error.message}`
+            : 'Appointment confirmed, but the confirmation email could not be sent.',
         }));
       }
     }
@@ -351,7 +353,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({ currentUser,
       } catch (error) {
         console.error('Follow-up appointment was saved, but the confirmation email failed:', error);
         window.dispatchEvent(new CustomEvent('ihms:data-error', {
-          detail: 'Follow-up appointment confirmed, but the confirmation email could not be sent.',
+          detail: error instanceof Error
+            ? `Follow-up saved! Note on email: ${error.message}`
+            : 'Follow-up appointment confirmed, but the confirmation email could not be sent.',
         }));
       }
     }

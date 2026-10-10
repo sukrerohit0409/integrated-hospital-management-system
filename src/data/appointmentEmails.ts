@@ -3,14 +3,19 @@ import { supabase } from '../lib/supabase';
 export async function sendAppointmentConfirmation(appointmentId: string): Promise<void> {
   if (!supabase) return;
 
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) throw sessionError;
-  if (!session) throw new Error('Sign in again before sending the appointment confirmation email.');
+  let token = sessionData.session?.access_token;
+  if (!token) {
+    const { data: refreshData } = await supabase.auth.refreshSession();
+    token = refreshData.session?.access_token;
+  }
+  if (!token) throw new Error('Sign in again before sending the appointment confirmation email.');
 
   const response = await fetch('/api/appointment-confirmation', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${session.access_token}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ appointmentId }),

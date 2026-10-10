@@ -2,22 +2,15 @@ import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 import { getClientIp, isRateLimited } from './rateLimiter';
 
-type Request = {
-  method?: string;
-  headers: Record<string, string | string[] | undefined>;
-  body?: unknown;
-};
-
-type Response = {
-  status(code: number): Response;
-  json(body: unknown): void;
-  setHeader?(name: string, value: string): void;
-};
-
 type RecordPayload = Record<string, unknown>;
 
-function getHeader(headers: Request['headers'], name: string): string | undefined {
-  const key = Object.keys(headers || {}).find((header) => header.toLowerCase() === name.toLowerCase());
+function getHeader(headers: any, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (typeof headers.get === 'function') {
+    const val = headers.get(name);
+    return val || undefined;
+  }
+  const key = Object.keys(headers).find((header) => header.toLowerCase() === name.toLowerCase());
   const value = key ? headers[key] : undefined;
   return Array.isArray(value) ? value[0] : value;
 }
@@ -32,50 +25,81 @@ function escapeHtml(value: string): string {
   }[character] || character));
 }
 
-function parseBody(body: unknown): RecordPayload | null {
+async function parseBody(req: any): Promise<RecordPayload | null> {
   try {
-    const parsed = typeof body === 'string' ? JSON.parse(body) : body;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as RecordPayload
+    let body = req.body;
+    if (body === undefined && typeof req.json === 'function') {
+      body = await req.json();
+    } else if (typeof body === 'string') {
+      body = JSON.parse(body);
+    }
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as RecordPayload)
       : null;
   } catch {
     return null;
   }
 }
 
+function sendResponse(res: any, status: number, data: unknown, headers?: Record<string, string>) {
+  if (res && typeof res.status === 'function') {
+    if (headers && typeof res.setHeader === 'function') {
+      Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+    }
+    return res.status(status).json(data);
+  }
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(headers || {}),
+    },
+  });
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Appointment confirmation email could not be sent.';
 }
 
-export default async function handler(req: Request, res: Response) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed.' });
+export default async function handler(req: any, res: any) {
+  const method = req.method || (req instanceof Request ? req.method : 'GET');
+  if (method !== 'POST') {
+    return sendResponse(res, 405, { error: 'Method not allowed.' });
   }
 
-  const clientIp = getClientIp(req.headers || {});
-  const authorization = getHeader(req.headers, 'authorization');
+  const reqHeaders = req.headers || {};
+  const clientIp = getClientIp(reqHeaders);
+  const authorization = getHeader(reqHeaders, 'authorization');
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-  const body = parseBody(req.body);
+  const body = await parseBody(req);
   const appointmentId = typeof body?.appointmentId === 'string' ? body.appointmentId.trim() : '';
 
   if (!token || !appointmentId || appointmentId.length > 64 || !/^[a-zA-Z0-9_\-]+$/.test(appointmentId)) {
-    return res.status(400).json({ error: 'Authentication and valid appointment details are required.' });
+    return sendResponse(res, 400, { error: 'Authentication and valid appointment details are required.' });
   }
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = Number(process.env.SMTP_PORT);
+  const smtpPortStr = process.env.SMTP_PORT;
   const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpFromName = process.env.SMTP_FROM_NAME;
-  const smtpFromEmail = process.env.SMTP_FROM_EMAIL;
+  const rawSmtpPass = process.env.SMTP_PASS;
+  const smtpFromName = process.env.SMTP_FROM_NAME || 'PulseCare Integrated Hospital';
+  const smtpFromEmail = process.env.SMTP_FROM_EMAIL || smtpUser;
 
-  if (!supabaseUrl || !anonKey || !serviceRoleKey
-    || !smtpHost || (![465, 587].includes(smtpPort)) || !smtpUser || !smtpPass || !smtpFromName || !smtpFromEmail) {
-    return res.status(503).json({ error: 'Appointment email delivery is not configured on the server.' });
+  if (!supabaseUrl || !anonKey || !serviceRoleKey || !smtpHost || !smtpUser || !rawSmtpPass || !smtpFromEmail) {
+    return sendResponse(res, 503, {
+      error: 'Appointment email delivery is not configured on the server. Please verify SMTP_HOST, SMTP_USER, and SMTP_PASS environment variables.',
+    });
   }
+
+  const parsedPort = smtpPortStr ? parseInt(smtpPortStr, 10) : 465;
+  const smtpPort = Number.isNaN(parsedPort) ? 465 : parsedPort;
+  // If user pasted a Google App Password with space groups ("xxxx xxxx xxxx xxxx"), remove them
+  const smtpPass = (smtpHost.includes('gmail') || smtpUser.endsWith('@gmail.com'))
+    ? rawSmtpPass.replace(/\s+/g, '')
+    : rawSmtpPass;
 
   const publicClient = createClient(supabaseUrl, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -87,47 +111,78 @@ export default async function handler(req: Request, res: Response) {
   // 1. IP-level email dispatch rate limit (max 15 requests per 5 minutes per IP)
   const ipCheck = await isRateLimited(adminClient, `email_ip:${clientIp}`, 15, 300);
   if (ipCheck.limited) {
-    if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(ipCheck.retryAfter));
-    return res.status(429).json({ error: 'Too many email requests from this IP. Please wait before retrying.' });
+    return sendResponse(res, 429, { error: 'Too many email requests from this IP. Please wait before retrying.' }, {
+      'Retry-After': String(ipCheck.retryAfter),
+    });
   }
 
   try {
     const { data: { user }, error: authError } = await publicClient.auth.getUser(token);
     if (authError || !user) {
-      return res.status(401).json({ error: 'Your session is invalid or expired.' });
+      return sendResponse(res, 401, { error: 'Your session is invalid or expired.' });
     }
 
     // 2. Patient-level email dispatch rate limit (max 5 emails per 5 minutes per user)
     const userCheck = await isRateLimited(adminClient, `email_user:${user.id}`, 5, 300);
     if (userCheck.limited) {
-      if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(userCheck.retryAfter));
-      return res.status(429).json({ error: 'Email confirmation rate limit exceeded for this account. Please wait before requesting another confirmation.' });
+      return sendResponse(res, 429, { error: 'Email confirmation rate limit exceeded for this account. Please wait before requesting another confirmation.' }, {
+        'Retry-After': String(userCheck.retryAfter),
+      });
     }
 
-    const [{ data: profile, error: profileError }, { data: record, error: recordError }] = await Promise.all([
-      adminClient
-        .from('profiles')
-        .select('email,role')
-        .eq('id', user.id)
-        .single(),
-      adminClient
-        .from('ihms_records')
-        .select('payload')
-        .eq('record_type', 'appointments')
-        .eq('record_id', appointmentId)
-        .single(),
-    ]);
+    // Query profile and appointment record with retry to allow for eventual consistency after client write
+    let profile: { email?: string; role?: string } | null = null;
+    let record: { payload?: RecordPayload } | null = null;
 
-    if (profileError || recordError || !profile || !record || profile.role !== 'patient') {
-      return res.status(403).json({ error: 'This appointment cannot be confirmed for the signed-in account.' });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [profileRes, recordRes] = await Promise.all([
+        adminClient
+          .from('profiles')
+          .select('email,role')
+          .eq('id', user.id)
+          .maybeSingle(),
+        adminClient
+          .from('ihms_records')
+          .select('payload')
+          .eq('record_type', 'appointments')
+          .eq('record_id', appointmentId)
+          .maybeSingle(),
+      ]);
+
+      if (profileRes.data) profile = profileRes.data;
+      if (recordRes.data) {
+        record = recordRes.data;
+        break;
+      }
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
     }
 
-    const appointment = record.payload as RecordPayload;
-    if (appointment.patientId !== user.id || typeof profile.email !== 'string' || !profile.email) {
-      return res.status(403).json({ error: 'This appointment does not belong to the signed-in patient.' });
+    if (!record) {
+      return sendResponse(res, 404, { error: 'Appointment record could not be found to confirm.' });
     }
 
-    const patientName = typeof appointment.patientName === 'string' ? appointment.patientName : 'Patient';
+    const appointment = (record.payload || {}) as RecordPayload;
+    if (appointment.patientId !== user.id) {
+      return sendResponse(res, 403, { error: 'This appointment does not belong to the signed-in patient.' });
+    }
+
+    if (profile?.role && profile.role !== 'patient') {
+      return sendResponse(res, 403, { error: 'This appointment cannot be confirmed for this account type.' });
+    }
+
+    const recipientEmail = (
+      profile?.email ||
+      user.email ||
+      (typeof appointment.patientEmail === 'string' ? appointment.patientEmail : '')
+    ).trim().toLowerCase();
+
+    if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      return sendResponse(res, 400, { error: 'No valid recipient email address found for this patient account.' });
+    }
+
+    const patientName = typeof appointment.patientName === 'string' ? appointment.patientName : (user.user_metadata?.name || 'Patient');
     const tokenNumber = typeof appointment.tokenNumber === 'string' ? appointment.tokenNumber : appointmentId;
     const doctorName = typeof appointment.doctorName === 'string' ? appointment.doctorName : 'Assigned doctor';
     const department = typeof appointment.department === 'string' ? appointment.department : 'Outpatient Clinic';
@@ -147,18 +202,26 @@ export default async function handler(req: Request, res: Response) {
     const safeReason = escapeHtml(reason);
     const safeFeeAmount = escapeHtml(feeAmount);
 
-    const { data: claimed, error: claimError } = await adminClient.rpc(
-      'claim_ihms_appointment_confirmation',
-      {
-        p_appointment_id: appointmentId,
-        p_recipient_email: profile.email,
-      },
-    );
-    if (claimError) {
-      throw claimError;
+    let claimed = true;
+    try {
+      const { data: claimData, error: claimError } = await adminClient.rpc(
+        'claim_ihms_appointment_confirmation',
+        {
+          p_appointment_id: appointmentId,
+          p_recipient_email: recipientEmail,
+        },
+      );
+      if (claimError) {
+        console.warn('claim_ihms_appointment_confirmation RPC warning:', claimError.message);
+      } else if (claimData === false) {
+        claimed = false;
+      }
+    } catch (rpcErr) {
+      console.warn('claim_ihms_appointment_confirmation execution fallback:', rpcErr);
     }
+
     if (!claimed) {
-      return res.status(200).json({ message: 'Appointment confirmation email already sent or is currently being sent.' });
+      return sendResponse(res, 200, { message: 'Appointment confirmation email already sent or is currently being sent.' });
     }
 
     const transporter = nodemailer.createTransport({
@@ -166,11 +229,14 @@ export default async function handler(req: Request, res: Response) {
       port: smtpPort,
       secure: smtpPort === 465,
       auth: { user: smtpUser, pass: smtpPass },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
 
     const sendInfo = await transporter.sendMail({
       from: { name: smtpFromName, address: smtpFromEmail },
-      to: profile.email,
+      to: recipientEmail,
       subject: `Appointment confirmed - ${tokenNumber}`,
       text: [
         `Dear ${patientName},`,
@@ -220,21 +286,23 @@ export default async function handler(req: Request, res: Response) {
 </html>`,
     });
 
-    const { error: sentUpdateError } = await adminClient
-      .from('ihms_email_notifications')
-      .update({
-        status: 'sent',
-        provider_message_id: sendInfo.messageId || null,
-        sent_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('appointment_id', appointmentId)
-      .eq('notification_type', 'appointment_confirmation');
-    if (sentUpdateError) {
-      throw sentUpdateError;
+    try {
+      await adminClient
+        .from('ihms_email_notifications')
+        .upsert({
+          appointment_id: appointmentId,
+          notification_type: 'appointment_confirmation',
+          recipient_email: recipientEmail,
+          status: 'sent',
+          provider_message_id: sendInfo.messageId || null,
+          sent_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+    } catch (auditErr) {
+      console.warn('Could not record sent notification status:', auditErr);
     }
 
-    return res.status(200).json({ message: 'Appointment confirmation email sent.' });
+    return sendResponse(res, 200, { message: 'Appointment confirmation email sent.' });
   } catch (error) {
     try {
       await adminClient
@@ -249,7 +317,8 @@ export default async function handler(req: Request, res: Response) {
     } catch (statusUpdateError) {
       console.error('Could not mark notification as failed:', statusUpdateError);
     }
-    console.error('Appointment confirmation email failed:', getErrorMessage(error));
-    return res.status(502).json({ error: 'Appointment was saved, but the confirmation email could not be sent.' });
+    const errDetail = getErrorMessage(error);
+    console.error('Appointment confirmation email failed:', errDetail);
+    return sendResponse(res, 502, { error: `Appointment confirmed, but email delivery failed: ${errDetail}` });
   }
 }

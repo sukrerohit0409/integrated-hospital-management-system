@@ -50,9 +50,14 @@ export default async function handler(req: any, res: any) {
   if (method === 'GET') {
     const headers = req.headers || {};
     const clientIp = getClientIp(headers);
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const adminClient = supabaseUrl && serviceRoleKey
+      ? createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
+      : null;
 
-    // Rate limiting: Max 60 requests per minute per IP
-    const ipCheck = await isRateLimited(null, `hospital_ip:${clientIp}`, 60, 60);
+    // Rate limiting: Max 60 requests per minute per IP (database-backed if configured)
+    const ipCheck = await isRateLimited(adminClient, `hospital_ip:${clientIp}`, 60, 60);
     if (ipCheck.limited) {
       if (res && typeof res.status === 'function') {
         if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(ipCheck.retryAfter));
