@@ -14,6 +14,36 @@ begin
 end;
 $$;
 
+create or replace function public.ihms_is_valid_consultation_slot(p_time_slot text)
+returns boolean
+language plpgsql
+immutable
+set search_path = ''
+as $$
+declare
+  slot_hour integer;
+  slot_minute integer;
+  slot_minutes integer;
+begin
+  if coalesce(p_time_slot, '') !~ '^(0[1-9]|1[0-2]):[0-5]\d [AP]M$' then
+    return false;
+  end if;
+
+  slot_hour := split_part(split_part(p_time_slot, ' ', 1), ':', 1)::integer % 12;
+  slot_minute := split_part(split_part(p_time_slot, ' ', 1), ':', 2)::integer;
+  if split_part(p_time_slot, ' ', 2) = 'PM' then
+    slot_hour := slot_hour + 12;
+  end if;
+  slot_minutes := slot_hour * 60 + slot_minute;
+
+  -- The existing 30-minute slot interval and midday break remain unchanged.
+  return slot_minutes >= 9 * 60
+    and slot_minutes + 30 <= 22 * 60
+    and mod(slot_minutes - 9 * 60, 30) = 0
+    and not (slot_minutes > 12 * 60 and slot_minutes < 14 * 60);
+end;
+$$;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   name text not null,
@@ -544,12 +574,7 @@ begin
         and coalesce(old.payload ->> 'type', '') <> 'walk_in'
       then
         if coalesce(old.payload ->> 'date', '') !~ '^\d{4}-\d{2}-\d{2}$'
-          or coalesce(old.payload ->> 'timeSlot', '') not in (
-            '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-            '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-            '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-            '04:30 PM', '05:00 PM'
-          )
+          or not public.ihms_is_valid_consultation_slot(old.payload ->> 'timeSlot')
         then
           raise exception 'Appointment date or slot is invalid';
         end if;
@@ -849,12 +874,7 @@ begin
       end if;
       if (new.payload ->> 'date')::date < (now() at time zone 'Asia/Kolkata')::date
         or new.payload ->> 'timeSlot' is null
-        or new.payload ->> 'timeSlot' not in (
-          '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-          '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-          '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-          '04:30 PM', '05:00 PM'
-        )
+        or not public.ihms_is_valid_consultation_slot(new.payload ->> 'timeSlot')
         or new.payload ->> 'type' is null
         or new.payload ->> 'type' not in ('online_booking', 'follow_up')
       then
@@ -946,12 +966,7 @@ begin
           raise exception 'Walk-in appointments must belong to a patient or an identified walk-in';
         end if;
       else
-        if coalesce(new.payload ->> 'timeSlot', '') not in (
-          '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-          '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-          '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-          '04:30 PM', '05:00 PM'
-        )
+        if not public.ihms_is_valid_consultation_slot(new.payload ->> 'timeSlot')
           or coalesce(new.payload ->> 'status', '') <> 'scheduled'
         then
           raise exception 'Booked appointment details are invalid';
@@ -1200,3 +1215,63 @@ begin
   end if;
 end;
 $$;
+
+-- Distributed atomic rate limiting table & RPC function
+create table if not exists public.ihms_rate_limits (
+  limiter_key text primary key,
+  request_count integer not null default 1,
+  first_request_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+alter table public.ihms_rate_limits enable row level security;
+revoke all on public.ihms_rate_limits from anon, authenticated, public;
+
+create or replace function public.check_ihms_rate_limit(
+  p_key text,
+  p_max_requests integer,
+  p_window_seconds integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_now timestamptz := now();
+  v_record public.ihms_rate_limits%rowtype;
+begin
+  if p_key is null or length(p_key) = 0 or p_max_requests <= 0 or p_window_seconds <= 0 then
+    return true;
+  end if;
+
+  select * into v_record
+  from public.ihms_rate_limits
+  where limiter_key = p_key
+  for update;
+
+  if not found or v_record.expires_at <= v_now then
+    insert into public.ihms_rate_limits (limiter_key, request_count, first_request_at, expires_at)
+    values (p_key, 1, v_now, v_now + (p_window_seconds || ' seconds')::interval)
+    on conflict (limiter_key) do update
+      set request_count = 1,
+          first_request_at = v_now,
+          expires_at = v_now + (p_window_seconds || ' seconds')::interval;
+    return true;
+  end if;
+
+  if v_record.request_count >= p_max_requests then
+    return false;
+  end if;
+
+  update public.ihms_rate_limits
+  set request_count = request_count + 1
+  where limiter_key = p_key;
+
+  return true;
+end;
+$$;
+
+revoke all on function public.check_ihms_rate_limit(text, integer, integer) from public, anon;
+grant execute on function public.check_ihms_rate_limit(text, integer, integer) to authenticated, service_role;
+

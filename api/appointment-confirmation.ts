@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
+import { getClientIp, isRateLimited } from './rateLimiter';
 
 type Request = {
   method?: string;
@@ -10,6 +11,7 @@ type Request = {
 type Response = {
   status(code: number): Response;
   json(body: unknown): void;
+  setHeader?(name: string, value: string): void;
 };
 
 type RecordPayload = Record<string, unknown>;
@@ -50,13 +52,14 @@ export default async function handler(req: Request, res: Response) {
     return res.status(405).json({ error: 'Method not allowed.' });
   }
 
+  const clientIp = getClientIp(req.headers || {});
   const authorization = getHeader(req.headers, 'authorization');
   const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
   const body = parseBody(req.body);
   const appointmentId = typeof body?.appointmentId === 'string' ? body.appointmentId.trim() : '';
 
-  if (!token || !appointmentId) {
-    return res.status(400).json({ error: 'Authentication and appointment details are required.' });
+  if (!token || !appointmentId || appointmentId.length > 64 || !/^[a-zA-Z0-9_\-]+$/.test(appointmentId)) {
+    return res.status(400).json({ error: 'Authentication and valid appointment details are required.' });
   }
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -70,7 +73,7 @@ export default async function handler(req: Request, res: Response) {
   const smtpFromEmail = process.env.SMTP_FROM_EMAIL;
 
   if (!supabaseUrl || !anonKey || !serviceRoleKey
-    || !smtpHost || smtpPort !== 465 || !smtpUser || !smtpPass || !smtpFromName || !smtpFromEmail) {
+    || !smtpHost || (![465, 587].includes(smtpPort)) || !smtpUser || !smtpPass || !smtpFromName || !smtpFromEmail) {
     return res.status(503).json({ error: 'Appointment email delivery is not configured on the server.' });
   }
 
@@ -81,10 +84,24 @@ export default async function handler(req: Request, res: Response) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // 1. IP-level email dispatch rate limit (max 15 requests per 5 minutes per IP)
+  const ipCheck = await isRateLimited(adminClient, `email_ip:${clientIp}`, 15, 300);
+  if (ipCheck.limited) {
+    if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(ipCheck.retryAfter));
+    return res.status(429).json({ error: 'Too many email requests from this IP. Please wait before retrying.' });
+  }
+
   try {
     const { data: { user }, error: authError } = await publicClient.auth.getUser(token);
     if (authError || !user) {
       return res.status(401).json({ error: 'Your session is invalid or expired.' });
+    }
+
+    // 2. Patient-level email dispatch rate limit (max 5 emails per 5 minutes per user)
+    const userCheck = await isRateLimited(adminClient, `email_user:${user.id}`, 5, 300);
+    if (userCheck.limited) {
+      if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(userCheck.retryAfter));
+      return res.status(429).json({ error: 'Email confirmation rate limit exceeded for this account. Please wait before requesting another confirmation.' });
     }
 
     const [{ data: profile, error: profileError }, { data: record, error: recordError }] = await Promise.all([
@@ -147,7 +164,7 @@ export default async function handler(req: Request, res: Response) {
     const transporter = nodemailer.createTransport({
       host: smtpHost,
       port: smtpPort,
-      secure: true,
+      secure: smtpPort === 465,
       auth: { user: smtpUser, pass: smtpPass },
     });
 
@@ -219,15 +236,19 @@ export default async function handler(req: Request, res: Response) {
 
     return res.status(200).json({ message: 'Appointment confirmation email sent.' });
   } catch (error) {
-    await adminClient
-      .from('ihms_email_notifications')
-      .update({
-        status: 'failed',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('appointment_id', appointmentId)
-      .eq('notification_type', 'appointment_confirmation')
-      .eq('status', 'sending');
+    try {
+      await adminClient
+        .from('ihms_email_notifications')
+        .update({
+          status: 'failed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('appointment_id', appointmentId)
+        .eq('notification_type', 'appointment_confirmation')
+        .eq('status', 'sending');
+    } catch (statusUpdateError) {
+      console.error('Could not mark notification as failed:', statusUpdateError);
+    }
     console.error('Appointment confirmation email failed:', getErrorMessage(error));
     return res.status(502).json({ error: 'Appointment was saved, but the confirmation email could not be sent.' });
   }

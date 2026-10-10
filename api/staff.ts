@@ -1,14 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
+import { getClientIp, isRateLimited } from './rateLimiter';
 
 type Request = {
   method?: string;
-  headers: { authorization?: string };
+  headers: Record<string, string | string[] | undefined>;
   body?: unknown;
 };
 
 type Response = {
   status(code: number): Response;
   json(body: unknown): void;
+  setHeader?(name: string, value: string): void;
 };
 
 const validStaffRoles = new Set([
@@ -16,11 +18,26 @@ const validStaffRoles = new Set([
   'nurse', 'cleaner', 'ward_boy', 'other',
 ]);
 
+function isValidEmail(email: string): boolean {
+  return email.length >= 5 && email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function isValidPhone(phone: string): boolean {
+  return phone.length >= 7 && phone.length <= 25 && /^[+]?[0-9\s\-()]+$/.test(phone);
+}
+
+function sanitizeText(value: unknown, maxLen = 100): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLen) : undefined;
+}
+
 export default async function handler(req: Request, res: Response) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const clientIp = getClientIp(req.headers || {});
   const authHeader = (req.headers as Record<string, string | undefined>)?.authorization
     || (req.headers as Record<string, string | undefined>)?.[Object.keys(req.headers || {}).find((k) => k.toLowerCase() === 'authorization') || ''];
   const token = typeof authHeader === 'string' ? authHeader.match(/^Bearer (.+)$/i)?.[1] : undefined;
@@ -38,8 +55,23 @@ export default async function handler(req: Request, res: Response) {
   const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // 1. IP-level rate limiting (max 60 requests per 5 minutes per IP)
+  const ipCheck = await isRateLimited(adminClient, `staff_ip:${clientIp}`, 60, 300);
+  if (ipCheck.limited) {
+    if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(ipCheck.retryAfter));
+    return res.status(429).json({ error: 'Too many staff management requests from this IP. Please try again later.' });
+  }
+
   const { data: { user }, error: authError } = await publicClient.auth.getUser(token);
   if (authError || !user) return res.status(401).json({ error: 'Your session is invalid or expired.' });
+
+  // 2. User-level rate limiting (max 20 staff modifications per 5 minutes per authenticated user)
+  const userCheck = await isRateLimited(adminClient, `staff_user:${user.id}`, 20, 300);
+  if (userCheck.limited) {
+    if (typeof res.setHeader === 'function') res.setHeader('Retry-After', String(userCheck.retryAfter));
+    return res.status(429).json({ error: 'Account management limit exceeded. Please wait a few minutes before trying again.' });
+  }
 
   const { data: actor, error: actorError } = await adminClient
     .from('profiles')
@@ -72,22 +104,30 @@ export default async function handler(req: Request, res: Response) {
     const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
     const role = typeof body.role === 'string' ? body.role : '';
     const password = typeof body.password === 'string' ? body.password.trim() : '';
-    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone || !validStaffRoles.has(role)
-      || password.length < 8) {
+    if (
+      !name || name.length < 2 || name.length > 100 ||
+      !isValidEmail(email) ||
+      !isValidPhone(phone) ||
+      !validStaffRoles.has(role) ||
+      password.length < 8 || password.length > 72
+    ) {
       return res.status(400).json({
-        error: 'Name, valid email, phone, permitted staff role, and a password of at least 8 characters are required.',
+        error: 'Name (2-100 chars), valid email, valid phone, permitted staff role, and a password of 8-72 characters are required.',
       });
     }
     if (actor.role === 'manager' && ['admin', 'manager'].includes(role)) {
       return res.status(403).json({ error: 'Managers cannot create admin or manager accounts.' });
     }
 
+    const rawAge = Number(body.age);
+    const validAge = Number.isInteger(rawAge) && rawAge >= 1 && rawAge <= 125 ? rawAge : undefined;
+
     const details = {
-      customRoleTitle: typeof body.customRoleTitle === 'string' ? body.customRoleTitle.trim() : undefined,
-      department: typeof body.department === 'string' ? body.department.trim() : undefined,
-      specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
-      qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
-      age: Number.isInteger(body.age) ? (body.age as number) : Number.isInteger(Number(body.age)) && Number(body.age) > 0 ? Number(body.age) : undefined,
+      customRoleTitle: sanitizeText(body.customRoleTitle),
+      department: sanitizeText(body.department),
+      specialty: sanitizeText(body.specialty),
+      qualification: sanitizeText(body.qualification),
+      age: validAge,
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };
@@ -129,18 +169,26 @@ export default async function handler(req: Request, res: Response) {
     const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
     const isPatientInvite = body.action === 'invitePatient';
     const role = 'patient';
-    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !phone) {
-      return res.status(400).json({ error: 'Name, valid email, and phone are required.' });
+    if (
+      !name || name.length < 2 || name.length > 100 ||
+      !isValidEmail(email) ||
+      !isValidPhone(phone)
+    ) {
+      return res.status(400).json({ error: 'Name (2-100 chars), valid email, and valid phone are required.' });
     }
     if (isPatientInvite && !['admin', 'manager', 'receptionist'].includes(actor.role)) {
       return res.status(403).json({ error: 'Your hospital role cannot invite patient accounts.' });
     }
+
+    const rawPatientAge = Number(body.age);
+    const validPatientAge = Number.isInteger(rawPatientAge) && rawPatientAge >= 1 && rawPatientAge <= 125 ? rawPatientAge : undefined;
+
     const details = {
-      customRoleTitle: typeof body.customRoleTitle === 'string' ? body.customRoleTitle.trim() : undefined,
-      department: typeof body.department === 'string' ? body.department.trim() : undefined,
-      specialty: typeof body.specialty === 'string' ? body.specialty.trim() : undefined,
-      qualification: typeof body.qualification === 'string' ? body.qualification.trim() : undefined,
-      age: Number.isInteger(body.age) ? (body.age as number) : Number.isInteger(Number(body.age)) && Number(body.age) > 0 ? Number(body.age) : undefined,
+      customRoleTitle: sanitizeText(body.customRoleTitle),
+      department: sanitizeText(body.department),
+      specialty: sanitizeText(body.specialty),
+      qualification: sanitizeText(body.qualification),
+      age: validPatientAge,
       gender: ['Male', 'Female', 'Other'].includes(String(body.gender)) ? body.gender : undefined,
       status: 'active',
     };
