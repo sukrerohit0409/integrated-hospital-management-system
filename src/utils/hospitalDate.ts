@@ -1,4 +1,6 @@
-const HOSPITAL_TIME_ZONE = 'Asia/Kolkata';
+import { APPOINTMENT_SCHEDULE } from '../data/appointmentSchedule.ts';
+
+export const HOSPITAL_TIME_ZONE = APPOINTMENT_SCHEDULE.timeZone;
 
 export function getHospitalDate(date = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-CA', {

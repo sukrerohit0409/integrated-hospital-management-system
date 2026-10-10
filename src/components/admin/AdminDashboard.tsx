@@ -257,6 +257,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
     setNewStaffPhone('');
     setNewStaffPassword('');
     setCustomRoleTitle('');
+    setNewDoctorSpecialty('');
+    setNewDoctorQualification('');
   };
 
   const handleToggleStaffStatus = async (member: User) => {
@@ -285,7 +287,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
           }));
         });
       } else {
-        store.deleteUser(id);
+        try {
+          store.deleteUser(id);
+        } catch (error) {
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: error instanceof Error ? error.message : 'Could not remove the staff account.',
+          }));
+        }
       }
     }
   };
@@ -1398,7 +1406,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser }) =
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Gender</label>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    {newStaffRole === 'doctor' ? 'Doctor gender' : 'Gender'}
+                  </label>
                   <select
                     value={newStaffGender}
                     onChange={(e) => setNewStaffGender(e.target.value as any)}

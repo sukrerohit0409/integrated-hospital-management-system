@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase';
 import './tabSession';
 import { getHospitalDate, getHospitalDateTime, getHospitalTime } from '../utils/hospitalDate';
 import { getUserDisplayName } from '../utils/userDisplay';
+import { isValidAppointmentSlot } from './appointmentSchedule';
 
 const STORAGE_KEYS = {
   USERS: 'ihms_users',
@@ -569,6 +570,17 @@ export const store = {
 
   deleteUser: (id: string) => {
     const users = store.getUsers();
+    const target = users.find((u) => u.id === id);
+    if (target && target.role === 'doctor') {
+      const today = getHospitalDate();
+      const appointments = store.getAppointments();
+      const hasActive = appointments.some(
+        (a) => a.doctorId === id && a.date >= today && ['scheduled', 'waiting', 'in_consultation'].includes(a.status)
+      );
+      if (hasActive) {
+        throw new Error('This doctor still has active or upcoming appointments. Mark the doctor inactive instead of removing the account.');
+      }
+    }
     const updated = users.filter((u) => u.id !== id);
     setStored(STORAGE_KEYS.USERS, updated);
   },
@@ -593,6 +605,9 @@ export const store = {
     getStored<Appointment[]>(STORAGE_KEYS.APPOINTMENTS, INITIAL_APPOINTMENTS),
 
   addAppointment: (apt: Omit<Appointment, 'id' | 'tokenNumber' | 'createdAt'>): Appointment => {
+    if (apt.type !== 'walk_in' && !isValidAppointmentSlot(apt.timeSlot)) {
+      throw new Error('The selected appointment time is outside the consultation window.');
+    }
     const appointments = store.getAppointments();
     const newApt: Appointment = {
       ...apt,

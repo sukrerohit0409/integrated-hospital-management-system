@@ -218,8 +218,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
     try {
       const savedRx = store.savePrescription(activeConsultationApt.id, {
         doctorId: currentUser?.id || 'u-doc-1',
-        doctorName: currentUser?.name || 'Dr. Aryan Sharma',
-        doctorSpecialty: currentUser?.specialty || 'Consultant Physician',
+        doctorName: currentUser?.name || 'Dr. Rohan Sharma (Cardiology)',
+        doctorSpecialty: currentUser?.specialty || 'Interventional Cardiology',
         patientId: activeConsultationApt.patientId,
         patientName: activeConsultationApt.patientName,
         patientAge: activeConsultationApt.patientAge,
@@ -286,17 +286,17 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({ currentUser })
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-base sm:text-lg font-bold text-slate-900 truncate">
-                {currentUser?.name || 'Dr. Aryan Sharma'}
+                {currentUser?.name || 'Dr. Rohan Sharma (Cardiology)'}
               </h1>
               <span className="text-[10px] sm:text-xs px-2 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 font-semibold shrink-0">
                 OPD Chamber 4
               </span>
             </div>
             <p className="text-xs text-teal-700 font-medium truncate">
-              {currentUser?.specialty || 'Consultant Cardiologist & Physician'} · {currentUser?.qualification || 'MBBS, MD'}
+              {currentUser?.specialty || 'Interventional Cardiology'} · {currentUser?.qualification || 'MBBS, MD, DM (Cardiology)'}
             </p>
             <p className="text-[11px] text-slate-500 truncate">
-              Department: {currentUser?.department || 'Internal Medicine'} · Available for consultations
+              Department: {currentUser?.department || 'Cardiology'} · Available for consultations
             </p>
           </div>
         </div>

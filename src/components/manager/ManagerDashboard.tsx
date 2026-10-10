@@ -146,7 +146,13 @@ export const ManagerDashboard: React.FC<{ currentUser: User }> = ({ currentUser 
           }));
         });
       } else {
-        store.deleteUser(id);
+        try {
+          store.deleteUser(id);
+        } catch (error) {
+          window.dispatchEvent(new CustomEvent('ihms:data-error', {
+            detail: error instanceof Error ? error.message : 'Could not remove the staff account.',
+          }));
+        }
       }
     }
   };

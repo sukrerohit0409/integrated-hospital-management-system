@@ -6,6 +6,7 @@ import { useHospitalDate } from '../../hooks/useHospitalDate';
 import { manageStaffAccount } from '../../data/staffAccounts';
 import { supabase } from '../../lib/supabase';
 import { AttendanceMarker } from '../AttendanceMarker';
+import { APPOINTMENT_TIME_SLOTS } from '../../data/appointmentSchedule';
 import {
   Users,
   CalendarClock,
@@ -311,13 +312,7 @@ export const ReceptionistDashboard: React.FC<{ currentUser: User }> = ({ current
     }
   };
 
-  // Standard Available Slots
-  const ALL_SLOTS = [
-    '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-    '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-    '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-    '04:30 PM', '05:00 PM'
-  ];
+  const ALL_SLOTS = APPOINTMENT_TIME_SLOTS;
 
   // Book from slot checker
   const handleQuickSlotBook = (slot: string) => {
