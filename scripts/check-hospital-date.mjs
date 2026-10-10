@@ -1,11 +1,5 @@
 import { firstOpenHospitalSlot, isHospitalTimeSlotPast } from '../src/utils/hospitalDate.ts';
-
-const TIME_SLOTS = [
-  '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM',
-  '11:00 AM', '11:30 AM', '12:00 PM', '02:00 PM',
-  '02:30 PM', '03:00 PM', '03:30 PM', '04:00 PM',
-  '04:30 PM', '05:00 PM',
-];
+import { APPOINTMENT_TIME_SLOTS, isValidAppointmentSlot } from '../src/data/appointmentSchedule.ts';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -18,10 +12,19 @@ assert(isHospitalTimeSlotPast('2026-10-07', '02:00 PM', afternoon), 'current slo
 assert(!isHospitalTimeSlotPast('2026-10-07', '02:30 PM', afternoon), 'later slot must still be open');
 assert(isHospitalTimeSlotPast('2026-10-06', '05:00 PM', afternoon), 'yesterday must be past');
 assert(!isHospitalTimeSlotPast('2026-10-08', '09:00 AM', afternoon), 'tomorrow must stay open');
+assert(APPOINTMENT_TIME_SLOTS[0] === '09:00 AM', 'consultation window must open at 09:00 AM');
+assert(APPOINTMENT_TIME_SLOTS.includes('09:30 PM'), '09:30 PM must be the final valid 30-minute slot');
+assert(!APPOINTMENT_TIME_SLOTS.includes('10:00 PM'), '10:00 PM is the closing boundary, not a start time');
+assert(!APPOINTMENT_TIME_SLOTS.includes('12:30 PM'), 'existing midday break must remain unavailable');
+assert(isValidAppointmentSlot('09:00 AM'), '09:00 AM must be valid');
+assert(isValidAppointmentSlot('09:30 PM'), '09:30 PM must be valid and end at 10:00 PM');
+assert(!isValidAppointmentSlot('08:30 AM'), 'pre-opening slot must be invalid');
+assert(!isValidAppointmentSlot('10:00 PM'), '10:00 PM start must be invalid');
+assert(!isValidAppointmentSlot('09:45 PM'), 'off-interval slot must be invalid');
 
 const taken = new Set(['02:30 PM']);
 assert(
-  firstOpenHospitalSlot(TIME_SLOTS, '2026-10-07', (slot) => taken.has(slot), afternoon) === '03:00 PM',
+  firstOpenHospitalSlot(APPOINTMENT_TIME_SLOTS, '2026-10-07', (slot) => taken.has(slot), afternoon) === '03:00 PM',
   'same-day follow-up must skip elapsed slots and taken slots',
 );
 

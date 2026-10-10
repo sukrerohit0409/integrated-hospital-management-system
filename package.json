@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start": "vite preview --port=3000 --host=0.0.0.0",
     "clean": "node scripts/clean.mjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node scripts/check-hospital-date.mjs && node --experimental-strip-types scripts/test-ihms-invariants.mjs && node --experimental-strip-types scripts/test-rate-limiting.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

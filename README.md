@@ -4,28 +4,33 @@ A comprehensive, role-based hospital management web application built with **Rea
 
 ## Features
 
-- **Multi-Role Dashboards** — Admin, Manager, Doctor, Receptionist, Staff (Nurse/Ward Boy/Cleaner), and Patient portals
-- **Appointment Management** — Online booking, walk-in registration, queue management, and slot checker
-- **Digital Prescriptions** — Doctors write prescriptions with print-ready modal
-- **Fee Collection & Billing** — Cash / Card / UPI payment tracking with real-time revenue reports
-- **Medical Test Charges** — Doctors can add consultation charges; reception must review and approve them before collection
-- **Staff Attendance** — Clock in/out, working hours & days tracking
-- **Leave Management** — Staff apply for leave, Managers approve/reject
-- **Revenue & Expense Analytics** — Date-filtered financial dashboards for Admin
-- **Responsive Design** — Works on mobile, tablet, and desktop
+- **Public Landing Page & Hospital Directory** — Modern public website with hospital overview, departments, doctor directory, emergency helpline (+91 82619 98094), and online appointment booking.
+- **Multi-Role Dashboards** — Dedicated portals for Admin, Manager, Doctor, Receptionist, Staff (Nurse, Pharmacist, Lab Technician, Other), and Patients.
+- **Appointment Management & Slot Checker** — Standardized consultation window (09:00 AM – 10:00 PM IST, 30-minute slots, midday break 12:30 PM – 02:00 PM), dynamic slot generator, walk-in registration, token numbering, and queue management.
+- **Appointment Confirmation Emails** — Automated, idempotent email delivery via Nodemailer (supporting ports 465 SSL and 587 STARTTLS) with custom HTML email templates and delivery ledger.
+- **Doctor Consultation & Digital Prescriptions** — Doctors manage queues, record clinical diagnoses and consultation notes, and generate line-item prescriptions with print-ready modal.
+- **Fee Collection & Billing** — Cash / Card / UPI payment tracking with automatic revenue ledger updates and reception receipt generation.
+- **Medical Test & Consultation Charges** — Doctors add itemized consultation and test charges; receptionists review, collect, and settle fees.
+- **Staff Attendance & Working Hours** — Clock in/out tracking using official hospital IST time with automatic decimal hours and working days computation.
+- **Leave Management** — Staff apply for leave with date ranges and categories; Managers and Admins review, approve, or reject.
+- **Revenue & Expense Analytics** — Date-filtered financial dashboards, payment method breakdowns, and net income calculations for Admin.
+- **Data Integrity & Deletion Guards** — Prevents deletion of doctors with active or upcoming appointments in both local demo store and Supabase backend.
+- **Multi-Session Tab Isolation** — Isolated per-tab sessions (`tabSessionId` + `sessionStorage`) allowing multiple roles to run simultaneously in different tabs of the same browser without session crosstalk.
+- **Responsive Design** — Fully responsive interface across mobile, tablet, and desktop viewports.
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Frontend | React 19 + TypeScript 7 |
-| Styling | Tailwind CSS 4 |
+|---|---|
+| Frontend | React 19 + TypeScript |
+| Styling | Tailwind CSS 4 (via `@tailwindcss/vite`) |
 | Build Tool | Vite 8 |
 | Icons | Lucide React |
 | Animation | Motion (Framer Motion) |
-| Authentication | Supabase Auth (when configured) |
-| User profiles | Supabase PostgreSQL with Row Level Security |
-| Dashboard records | Supabase PostgreSQL with Row Level Security and Realtime |
+| Transactional Email | Nodemailer (Serverless API, Ports 465 & 587) |
+| Authentication | Supabase Auth (or Local Demo Mode) |
+| User Profiles & Data | Supabase PostgreSQL with Row Level Security & Realtime |
+| Database Functions | PostgreSQL Stored Procedures / RPCs (`save_ihms_consultation`, `claim_ihms_appointment_confirmation`) |
 
 ## Getting Started
 
@@ -50,118 +55,145 @@ npm run dev
 
 The app will be available at **http://localhost:3000**
 
-### Production Build
+### Verification and Quality Checks
 
 ```bash
+# Run automated test suite (hospital date, invariants, and rate limiting)
+npm test
+
+# Frontend TypeScript check
+npm run lint
+
+# Serverless API TypeScript check
+npx tsc -p api/tsconfig.json
+
+# Production bundle build
 npm run build
-npm run start
 ```
 
-The repository-root GitHub Actions workflow runs `npm ci`, the frontend and API TypeScript checks, and the production build for every push and pull request.
+### Production Preview
 
-## Local demo mode
+```bash
+npm run start
+# Runs 'vite preview --port=3000 --host=0.0.0.0'
+```
 
-Without Supabase environment variables, development mode uses browser-local demo data. Changes to demo records are broadcast to other open tabs in the same browser, while sign-in sessions remain isolated per tab. The local-only demo password is `local-demo-only-not-for-deployment`; demo credentials are public and must never be reused for Supabase, deployment, or real patient/hospital accounts. Configure real accounts and unique passwords directly in Supabase; do not publish or reuse production credentials. Email verification and patient account registration are unavailable in demo mode; public registration is blocked, and reception can register a walk-in visit without creating a portal account. With Supabase configured, dashboards load from the shared database and new changes are synchronized to other signed-in users; if Realtime is disconnected, the client temporarily refreshes shared data every 10 seconds until the channel reconnects. The app does not import browser demo records into Supabase.
+The repository-root GitHub Actions workflow runs `npm ci`, frontend and API TypeScript checks, and the production build for every push and pull request.
 
-Authentication is isolated per browser tab. Opening a duplicated tab does not copy the signed-in user session; sign in separately in each tab. Reloading the same tab preserves its session.
+## Local Demo Mode
 
-## Supabase authentication setup
+Without Supabase environment variables, development mode uses browser-local demo data.
+- **Session Isolation:** Authentication is isolated per browser tab using `sessionStorage` and a unique `tabSessionId`. Opening multiple tabs allows testing different roles simultaneously (e.g. Doctor in Tab 1, Patient in Tab 2, Receptionist in Tab 3).
+- **Cross-Tab Synchronization:** Record changes (bookings, attendance, billing) trigger custom broadcast events (`ihms:data-success`, `ihms:data-error`) so open tabs reflect updates.
+- **Demo Credentials:** In demo mode, sign in using any demo account email with either the user's password or the master demo password `local-demo-only-not-for-deployment`.
+- **Safe Environment:** The app does not import browser demo records into Supabase. Demo credentials must never be reused for production deployment.
 
-### Create and configure the database
+## Supabase Authentication & Backend Setup
 
-1. Create a Supabase project and save its database password securely. Select the region closest to the hospital and wait until the project is ready.
-2. In **Project Settings → API**, copy the Project URL and the publishable/anon key. The browser uses only these public values; never use the service-role key in frontend code.
-3. Open **SQL Editor → New query**, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. Use a clean Supabase database for a new deployment. The script also supports the earlier auth-only schema; back up existing production data before applying schema upgrades.
-4. In **Table Editor**, verify that `profiles`, `ihms_records`, and `ihms_prescriptions` exist. In **Database → Publications**, verify that the tables are part of `supabase_realtime` (the script adds them). Keep Row Level Security enabled on all three tables; the script creates their role/ownership policies.
-5. In **Authentication → URL Configuration**, set the Site URL to your production Vercel URL and add the local and deployment callback URLs to Redirect URLs, for example `http://localhost:3000/**` and `https://<your-project>.vercel.app/**`. Add your custom domain and preview domain patterns if used. In **Authentication → Providers → Email**, enable **Confirm email**. Configure a production SMTP provider before registering or inviting real users; without confirmation enabled, the app refuses an immediate signup session and reports the configuration problem.
+### Create and Configure the Database
 
-### Connect the application and bootstrap its first admin
+1. Create a Supabase project and save its database password securely. Select the region closest to the hospital.
+2. In **Project Settings → API**, copy the Project URL and the publishable/anon key (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`). Never expose the service-role key in frontend code.
+3. Open **SQL Editor → New query**, paste the complete contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates:
+   - `profiles` table with role check constraint.
+   - `ihms_records` table with Row Level Security.
+   - `ihms_email_notifications` ledger.
+   - Transactional RPCs: `save_ihms_consultation` and `claim_ihms_appointment_confirmation`.
+4. In **Table Editor**, verify that `profiles`, `ihms_records`, and `ihms_email_notifications` exist and have Row Level Security enabled.
+5. In **Authentication → URL Configuration**, set the Site URL to your production URL and add redirect URLs (e.g. `http://localhost:3000/**`, `https://<your-project>.vercel.app/**`).
+6. In **Authentication → Providers → Email**, enable **Confirm email**.
 
-6. Copy `.env.example` to `.env.local`. Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for local browser access. Keep `SUPABASE_SERVICE_ROLE_KEY` and any provider API keys server-side; do not commit `.env.local`.
-7. For UI-only local work, start Vite with `npm run dev`. Patient portal invitations from reception use the `/api/staff` endpoint as a Vercel function: sign in to the Vercel CLI with `npx vercel login`, link this folder to your Vercel project with `npx vercel link`, then start the whole app with `npx vercel dev` (not `npm run dev`). This command loads the server-side variables from `.env.local`; never copy the service-role key into a `VITE_` variable. If Vercel asks for a port, use the prompted available port.
-8. Register the first account through the app's patient registration form and confirm its email before signing in. In Supabase **Authentication → Users**, copy that user's UUID. In **SQL Editor**, promote only this trusted account:
+### Connect the Application and Bootstrap First Admin
 
+7. Copy `.env.example` to `.env.local` and configure your credentials:
+   ```env
+   VITE_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+   VITE_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
+   SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
+   SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
+   SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY"
+   ```
+8. For local API development (including `/api/staff` and `/api/appointment-confirmation`), run:
+   ```bash
+   npx vercel dev
+   ```
+9. Register the first account through the patient registration form, confirm the verification email, and promote it to `admin` in the Supabase SQL Editor:
    ```sql
    update public.profiles
    set role = 'admin'
    where id = 'AUTH_USER_UUID'
      and role = 'patient';
    ```
-
-   Confirm that exactly one row was updated, then sign out and sign back in so the app reloads the new role. Patient self-registration always receives the `patient` role.
-9. Admins and Managers can create staff accounts from their dashboards. Staff email addresses are confirmed when the account is created; enter a unique initial password of at least 8 characters and share it securely with the staff member. Reception can optionally invite a patient portal account using the patient's real email address; the recipient must accept the emailed link and set a password before accessing the portal. Walk-in registration without a portal account remains available.
-
-### Deploy and verify
-
-10. Push the project to GitHub and import that repository into Vercel. The application is stored at the repository root; use the repository root as Vercel's Root Directory. Vercel installs build-time dependencies with `npm ci --include=dev`, then uses `npm run build` and `dist` as configured in [`vercel.json`](./vercel.json).
-11. In Vercel **Project → Settings → Environment Variables**, set these for Preview and Production, then redeploy:
-    - `VITE_SUPABASE_URL`
-    - `VITE_SUPABASE_ANON_KEY`
-    - `SUPABASE_URL`
-    - `SUPABASE_ANON_KEY`
-    - `SUPABASE_SERVICE_ROLE_KEY` (server-only; never prefix with `VITE_`)
-12. Test registration, email confirmation, login, logout, password change, Admin/Manager staff creation, a receptionist patient invitation, and a booking using separate browser profiles for different roles. Verify staff accounts can sign in without email confirmation and patient invitations still require accepting the emailed link. Verify that a patient cannot see another patient's records and that reception cannot read prescriptions. Also test two users booking the same doctor/time; only one should succeed.
-
-After deploying an application update that changes database policies, triggers, or validation, rerun the current [`supabase/schema.sql`](./supabase/schema.sql) in the Supabase SQL Editor before testing the affected workflows. The schema is designed to be reapplied to an existing installation; back up production data before applying database changes.
-
-The cloud database starts empty. Existing local demo accounts and browser data are not uploaded automatically. The schema stores bookings, prescriptions, attendance, leave, revenue, and expenses as shared records. Row Level Security limits each role's access. Consultation and prescription changes are saved together in a database transaction. The unique doctor/date/time index prevents duplicate online/follow-up bookings, and follow-up requests are linked to their source visit. Date-only workflows use India Standard Time (`Asia/Kolkata`); attendance clock-in/out timestamps and worked hours are generated by the database rather than trusted from the browser.
-
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are read by the server-side [`api/staff.ts`](./api/staff.ts) endpoint, which verifies caller permissions before creating email-confirmed staff accounts for Admins/Managers or sending email-verification invitations for patient portal accounts. Payment collection and the corresponding revenue record are written together by a database trigger; rerun the schema before enabling the updated app. Never expose the service-role key to the browser or commit it to GitHub.
-
-This is an educational demo foundation, not a compliance certification or a substitute for clinical security review. Before handling real patient/financial information, review local healthcare/privacy requirements, backups, audit trails, retention, MFA, access review, and operational recovery. Never expose the Supabase service-role key in browser code.
+10. Admins and Managers can subsequently create staff accounts directly from their dashboards.
 
 ## Deploy to Vercel
 
-### Patient appointment confirmation email
+### Patient Appointment Confirmation Email Configuration
 
-Patient-created appointments send a confirmation email after the appointment is persisted. The server-side Vercel function reads Gmail SMTP settings only from environment variables and sends only to the authenticated patient's profile email. The appointment email notification ledger is created by [`supabase/schema.sql`](./supabase/schema.sql); rerun the schema before enabling this workflow on an existing Supabase project.
+When a patient books an appointment, the serverless endpoint [`api/appointment-confirmation.ts`](./api/appointment-confirmation.ts) sends an authenticated, idempotent confirmation email.
 
-Configure these server-only Vercel variables:
+Configure these server-only environment variables in Vercel (**Project → Settings → Environment Variables**):
 
 - `SMTP_HOST=smtp.gmail.com`
-- `SMTP_PORT=465`
-- `SMTP_USER=your Gmail address`
-- `SMTP_PASS=your Google App Password`
-- `SMTP_FROM_NAME=Integrated Hospital Management System`
-- `SMTP_FROM_EMAIL=your Gmail address`
+- `SMTP_PORT=465` (or `587` with STARTTLS)
+- `SMTP_USER=your_gmail_address@gmail.com`
+- `SMTP_PASS=your_google_app_password`
+- `SMTP_FROM_NAME=PulseCare Integrated Hospital`
+- `SMTP_FROM_EMAIL=your_gmail_address@gmail.com`
 
-Do not prefix SMTP variables with `VITE_`. The Gmail account must have 2-Step Verification enabled and use a Google App Password. Email delivery failures do not create duplicate appointments; the booking remains persisted and can be retried safely through the notification ledger.
-
-1. Push the project to a Git provider and import it in Vercel.
-2. Use the default Vite settings (`npm run build`, output directory `dist`); [`vercel.json`](./vercel.json) declares them.
-3. Set the Supabase environment variables above in Vercel. Do not add a Supabase `service_role` key to any `VITE_` variable or browser code.
-4. Deploy, verify `/api/health` and `/api/hospital`, then test sign-up, email confirmation, sign-in, sign-out, and password change.
-
-You must connect your own Supabase and Vercel accounts to perform the actual hosted deployment; this workspace cannot create those external projects or set their secrets.
+> **Note:** Never prefix server-only credentials (`SUPABASE_SERVICE_ROLE_KEY`, `SMTP_*`) with `VITE_`.
 
 ## Project Structure
 
 ```
-├── api/                  # Vercel serverless routes (health, hospital, staff provisioning)
+├── api/                                # Vercel serverless functions
+│   ├── appointment-confirmation.ts     # Transactional confirmation emails (Nodemailer)
+│   ├── health.ts                       # Health check endpoint
+│   ├── hospital.ts                     # Public hospital info & doctor directory API
+│   ├── staff.ts                        # Administrative staff account provisioning & removal
+│   └── tsconfig.json                   # TypeScript config for serverless functions
+├── scripts/                            # Verification & invariant test scripts
+│   ├── check-hospital-date.mjs         # Timezone & date calculation tests
+│   └── test-ihms-invariants.mjs        # Slot bounds, conflict checks & deletion guards
 ├── supabase/
-│   └── schema.sql        # Shared data tables, access policies, and integrity checks
+│   └── schema.sql                      # Complete PostgreSQL schema, RLS policies & RPCs
 ├── src/
-│   ├── assets/images/    # Doctor avatars and hero images
+│   ├── assets/images/                  # Bundled hospital hero and doctor avatar images
 │   ├── components/
-│   │   ├── admin/        # Admin dashboard (revenue, expense, staff, attendance)
-│   │   ├── doctor/       # Doctor dashboard (consultations, prescriptions)
-│   │   ├── manager/      # Manager dashboard (staff oversight, leave approvals)
-│   │   ├── patient/      # Patient dashboard (booking, history, follow-ups)
-│   │   ├── receptionist/ # Receptionist dashboard (queue, fee collection, walk-in)
-│   │   ├── staff/        # Staff dashboard (attendance, leave applications)
-│   │   ├── Navbar.tsx
-│   │   ├── LoginModal.tsx
-│   │   ├── ChangePasswordModal.tsx
-│   │   └── PrintPrescriptionModal.tsx
+│   │   ├── admin/                      # Admin dashboard (finances, staff, attendance)
+│   │   ├── doctor/                     # Doctor dashboard (queue, consultations, Rx)
+│   │   ├── manager/                    # Manager dashboard (operations, HR, leave approvals)
+│   │   ├── patient/                    # Patient dashboard (booking, medical history)
+│   │   ├── receptionist/               # Receptionist dashboard (queue, walk-ins, billing)
+│   │   ├── staff/                      # Staff portal (attendance, leaves)
+│   │   ├── AttendanceMarker.tsx        # Clock in/out component with decimal hours math
+│   │   ├── ChangePasswordModal.tsx     # Password update dialog
+│   │   ├── LoginModal.tsx              # Role & credentials login dialog
+│   │   ├── Navbar.tsx                  # App header, role badge, quick-switch & logout
+│   │   ├── PrintPrescriptionModal.tsx  # Formatted, printable prescription slip
+│   │   └── PublicWebsite.tsx           # Public hospital landing page & booking portal
 │   ├── data/
-│   │   ├── mockData.ts   # Initial seed data
-│   │   └── store.ts      # In-memory data store with localStorage
-│   └── types/
-│       └── index.ts      # TypeScript type definitions
-├── index.html
-├── vite.config.ts
-├── tsconfig.json
-└── package.json
+│   │   ├── appointmentEmails.ts        # Client email trigger service
+│   │   ├── appointmentSchedule.ts      # 09:00 - 22:00 IST consultation slots & break filter
+│   │   ├── auth.ts                     # Supabase authentication helper layer
+│   │   ├── mockData.ts                 # Initial demo seed dataset & imported avatars
+│   │   ├── publicSite.ts               # Landing page content and hospital amenities
+│   │   ├── staffAccounts.ts            # Client interface to /api/staff management
+│   │   ├── store.ts                    # Synchronized data store (sessionStorage / Supabase)
+│   │   └── tabSession.ts               # Per-tab session isolation manager
+│   ├── utils/
+│   │   ├── hospitalDate.ts             # Asia/Kolkata timezone & calendar calculations
+│   │   └── userDisplay.ts              # Display name and role badge formatters
+│   ├── types/
+│   │   └── index.ts                    # TypeScript definitions for hospital data
+│   ├── App.tsx                         # Root router & layout component
+│   ├── index.css                       # Tailwind CSS stylesheet
+│   └── main.tsx                        # Application entry point
+├── index.html                          # HTML template
+├── package.json                        # Scripts & dependencies
+├── tsconfig.json                       # Client TypeScript configuration
+├── vercel.json                         # Vercel deployment configuration
+└── vite.config.ts                      # Vite build configuration
 ```
 
 ## License
