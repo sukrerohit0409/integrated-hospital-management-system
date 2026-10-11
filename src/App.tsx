@@ -25,7 +25,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(
     () => import.meta.env.DEV && !supabase ? store.getCurrentUser() : null
   );
-  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(!currentUser);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(hasPasswordRecoveryMarker);
   const [isLoadingSharedData, setIsLoadingSharedData] = useState(Boolean(supabase));
