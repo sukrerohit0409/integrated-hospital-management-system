@@ -4,12 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "skipLibCheck": true,
-    "noEmit": true,
-    "types": [
-      "node"
-    ]
+    "noEmit": true
   },
   "include": [
     "./**/*.ts"
   ]
 }
+
